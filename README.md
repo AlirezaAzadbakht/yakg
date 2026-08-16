@@ -14,14 +14,15 @@ Kerio code. It drives the client you already have installed.
 
 ## Status
 
-Early development. **Milestone 1 (detection) is complete**: YAKG reports what is installed and
-what the service is doing. It cannot yet change anything — every operation in this release is
-read-only.
+Early development. **Milestones 1 and 2 are complete**: YAKG reports what is installed and
+what the service is doing, and can start, stop, restart, enable and disable that service.
+Connecting and disconnecting as a first-class concept, and real tunnel-state detection, are
+still Milestone 3.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
 | 1 | Detection and status | Done |
-| 2 | Service control (start, stop, restart, enable, disable) | Not started |
+| 2 | Service control (start, stop, restart, enable, disable) | Done |
 | 3 | Connection control and real connection state | Not started |
 | 4 | Configuration viewing, validation and safe saving | Not started |
 | 5 | Profiles | Not started |
@@ -67,7 +68,14 @@ match the system GTK, and installing it from the distribution avoids that whole 
 
 Launch `yakg`, or find *YAKG* in your applications list. The window shows whether the Kerio
 client is installed, whether its service exists, whether it is running, and whether it starts at
-boot. Press the refresh button, or Ctrl+R, to re-check.
+boot.
+
+The primary button starts or stops the service. *Start at boot* is a switch in the System
+group. Restart is in the header menu. Each of those asks for administrator authentication
+through the normal GNOME password dialog; dismissing the dialog cancels the action and is not
+treated as an error.
+
+Press the refresh button, or Ctrl+R, to re-check.
 
 For troubleshooting, or on a machine with no desktop, the same information is available as text:
 
@@ -109,9 +117,16 @@ configuration first, and restore it if the write fails.
 
 Three things drive YAKG's design here.
 
-**The GUI does not run as root.** There is no `sudo yakg`. The interface runs as your user, and
-privileged operations will be narrowly scoped and requested through polkit when Milestone 2
-introduces them. Nothing in this release requires any privilege at all.
+**The GUI does not run as root.** There is no `sudo yakg`. The interface runs as your user.
+YAKG ships no privileged helper and no polkit policy of its own. Starting or stopping the
+service is a plain `systemctl` call; systemd asks polkit, and the session agent prompts. The
+actions involved are the ones systemd already ships:
+
+- `org.freedesktop.systemd1.manage-units` for start, stop and restart
+- `org.freedesktop.systemd1.manage-unit-files` for enable and disable
+
+On a host that is not running systemd, YAKG falls back to `pkexec` on the Kerio init script
+and on `update-rc.d`. That path has not been verified on a live SysV system.
 
 **Commands are never built as shell strings.** Every external command goes through one runner
 that takes an argument vector and never invokes a shell, so no value YAKG handles can be
@@ -171,6 +186,7 @@ src/yakg/
 │   ├── process.py     the only place a subprocess is spawned
 │   ├── constants.py   verified Kerio paths and names
 │   ├── detect.py      is the client installed?
+│   ├── classify.py    maps systemctl/pkexec errors to ActionOutcome
 │   ├── service.py     systemd and SysV backends
 │   └── status.py      assembles one snapshot for the UI
 ├── models/            frozen dataclasses shared by both sides
@@ -197,7 +213,15 @@ what it found. A package that was removed but not purged is correctly reported a
 
 **The service shows "Unknown"** — YAKG could not determine the state, which is different from
 knowing it is stopped. Open *Technical details* for the raw command output. The usual cause is
-systemd being installed but not running as PID 1, which happens in containers and WSL.
+systemd being installed but not running as PID 1, which happens in containers and WSL. The
+Start/Stop button is disabled in that case; Restart remains available.
+
+**Nothing happens after I close the password dialog** — that is intentional. Dismissing the
+authentication prompt cancels the action and is not treated as an error.
+
+**"YAKG could not ask for administrator authentication"** — no polkit agent is available in
+this session. On GNOME the agent is provided by gnome-shell; a headless or remote session will
+not have one.
 
 **Connection state is "Unknown" even though I am connected** — expected in this release.
 Determining a live tunnel needs facts that have not been verified yet; see the unresolved section
@@ -209,9 +233,10 @@ explanation and the apt command that fixes it.
 
 ## Known limitations
 
-- Read-only. Nothing can be started, stopped or configured from YAKG yet.
 - Connection state is only reported when the service is stopped; otherwise it is "Unknown".
-- No profiles, no tray icon, no notifications.
+- The SysV control path (`pkexec` on the init script and `update-rc.d`) is unverified on a
+  live SysV host.
+- No configuration editing, no profiles, no tray icon, no notifications.
 - Verified against exactly one Kerio version, on Ubuntu 24.04.
 - No packaging: source installation only.
 

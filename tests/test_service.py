@@ -329,10 +329,153 @@ class TestServiceManager:
         "operation",
         ["start_service", "stop_service", "restart_service", "enable_service", "disable_service"],
     )
-    def test_control_operations_refuse_rather_than_pretend(self, operation: str) -> None:
-        # Milestone 2 work. A button that silently does nothing would be worse
-        # than one that reports it is not implemented.
+    def test_null_backend_fails_with_an_explanation(self, operation: str) -> None:
         manager = ServiceManager(NullBackend())
 
-        with pytest.raises(NotImplementedError, match="Milestone 2"):
-            getattr(manager, operation)()
+        outcome = getattr(manager, operation)()
+
+        assert not outcome.ok
+        assert "supported init system" in outcome.message
+
+
+_SHELL_META = set(";&|<>$`\\\"'(){}")
+
+
+def _assert_safe_argv(argv: tuple[str, ...]) -> None:
+    assert argv
+    assert all(isinstance(part, str) for part in argv)
+    for part in argv:
+        assert not any(character in _SHELL_META for character in part), argv
+
+
+class TestSystemdControl:
+    @pytest.mark.parametrize(
+        ("method", "verb", "success"),
+        [
+            ("start", "start", "Started the Kerio VPN service."),
+            ("stop", "stop", "Stopped the Kerio VPN service."),
+            ("restart", "restart", "Restarted the Kerio VPN service."),
+            ("enable", "enable", "The Kerio VPN service will start at boot."),
+            ("disable", "disable", "The Kerio VPN service will not start at boot."),
+        ],
+    )
+    def test_builds_the_expected_argument_vector(
+        self, fake_run: InstallRunner, method: str, verb: str, success: str
+    ) -> None:
+        runner = fake_run(MODULE, {f"systemctl {verb}": result()})
+
+        outcome = getattr(SystemdBackend(), method)()
+
+        assert outcome.ok
+        assert outcome.message == success
+        assert runner.calls[-1] == ("systemctl", verb, "kerio-kvc.service")
+        _assert_safe_argv(runner.calls[-1])
+
+    def test_access_denied_is_cancelled(self, fake_run: InstallRunner) -> None:
+        fake_run(MODULE, {"systemctl start": result(returncode=1, stderr="Access denied\n")})
+
+        outcome = SystemdBackend().start()
+
+        assert not outcome.ok
+        assert outcome.cancelled
+
+    def test_no_agent_is_not_cancelled(self, fake_run: InstallRunner) -> None:
+        fake_run(
+            MODULE,
+            {
+                "systemctl start": result(
+                    returncode=1,
+                    stderr="org.freedesktop.DBus.Error.InteractiveAuthorizationRequired",
+                )
+            },
+        )
+
+        outcome = SystemdBackend().start()
+
+        assert not outcome.ok
+        assert not outcome.cancelled
+        assert "administrator authentication" in outcome.message
+
+    def test_timeout_is_a_failure(self, fake_run: InstallRunner) -> None:
+        fake_run(
+            MODULE,
+            {
+                "systemctl start": result(
+                    returncode=-2,
+                    timed_out=True,
+                    error="The command did not finish within 120 seconds.",
+                )
+            },
+        )
+
+        outcome = SystemdBackend().start()
+
+        assert not outcome.ok
+        assert "120" in outcome.detail
+
+    def test_unrecognised_failure_keeps_the_output(self, fake_run: InstallRunner) -> None:
+        fake_run(
+            MODULE,
+            {"systemctl start": result(returncode=1, stderr="Job for kerio-kvc.service failed.")},
+        )
+
+        outcome = SystemdBackend().start()
+
+        assert not outcome.ok
+        assert "Job for kerio-kvc.service failed." in outcome.detail
+
+
+class TestSysVControl:
+    @pytest.fixture
+    def script(self, tmp_path: Path) -> Path:
+        path = tmp_path / "init.d" / "kerio-kvc"
+        path.parent.mkdir(parents=True)
+        path.touch()
+        return path
+
+    @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
+    def test_uses_pkexec_on_the_init_script(
+        self, fake_run: InstallRunner, script: Path, verb: str
+    ) -> None:
+        runner = fake_run(MODULE, {"pkexec": result()})
+
+        getattr(SysVInitBackend(script), verb)()
+
+        assert runner.calls[-1] == ("pkexec", str(script), verb)
+        _assert_safe_argv(runner.calls[-1])
+
+    @pytest.mark.parametrize("verb", ["enable", "disable"])
+    def test_uses_update_rc_d_for_boot_state(
+        self, fake_run: InstallRunner, script: Path, verb: str
+    ) -> None:
+        runner = fake_run(MODULE, {"update-rc.d": result()})
+
+        getattr(SysVInitBackend(script), verb)()
+
+        assert runner.calls[-1] == ("pkexec", "/usr/sbin/update-rc.d", "kerio-kvc", verb)
+        _assert_safe_argv(runner.calls[-1])
+
+    def test_pkexec_dismissed_is_cancelled(self, fake_run: InstallRunner, script: Path) -> None:
+        fake_run(
+            MODULE,
+            {
+                "pkexec": result(
+                    returncode=126,
+                    stderr="Error executing command as another user: Request dismissed",
+                )
+            },
+        )
+
+        outcome = SysVInitBackend(script).start()
+
+        assert outcome.cancelled
+
+
+class TestServiceManagerControl:
+    def test_start_is_logged_and_delegated(self, fake_run: InstallRunner) -> None:
+        fake_run(MODULE, {"systemctl start": result()})
+
+        outcome = ServiceManager(SystemdBackend()).start_service()
+
+        assert outcome.ok
+        assert outcome.message == "Started the Kerio VPN service."

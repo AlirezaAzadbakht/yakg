@@ -56,6 +56,37 @@ Provenance: `/lib/systemd/system/kerio-kvc.service` and `/etc/init.d/kerio-kvc`.
 The unit is installed but ships **disabled**; the package enables it through
 `update-rc.d` / `invoke-rc.d` in `postinst`.
 
+### Privileges
+
+Provenance: `/usr/share/polkit-1/actions/org.freedesktop.systemd1.policy` on
+Ubuntu 24.04, polkit 124.
+
+`systemctl start|stop|restart kerio-kvc.service` is authorised by
+`org.freedesktop.systemd1.manage-units`. `systemctl enable|disable` is
+authorised by `org.freedesktop.systemd1.manage-unit-files`. Both default to
+`auth_admin_keep` for an active local session. YAKG therefore runs `systemctl`
+as the logged-in user and lets systemd and the session agent handle the prompt.
+It does not ship a helper or a policy file.
+
+The SysV path has no equivalent polkit action, so YAKG uses `pkexec` on
+`/etc/init.d/kerio-kvc` and `/usr/sbin/update-rc.d`. That path has **not** been
+verified on a host that actually boots with SysV init.
+
+### `ExecStart` and the shell
+
+The unit file's `ExecStart` line is:
+
+```
+/usr/sbin/kvpncsvc /var/lib/kerio-control-vpn 2>&1 | logger -p daemon.err -t kerio-control-vpnclient 2>/dev/null
+```
+
+systemd does not invoke a shell for `ExecStart`, so the `2>&1 | logger ...`
+tokens are passed to the daemon as extra arguments. The daemon takes its
+runtime directory from the first argument, which was confirmed directly
+(`kvpncsvc` creates that directory when given one). That it ignores the rest
+is inference from the lack of a shell and from the daemon treating a lone
+`--help` as a directory name; it is not a verified behavioural claim.
+
 ## Configuration
 
 Provenance: `/var/lib/dpkg/info/kerio-control-vpnclient.postinst`, which writes

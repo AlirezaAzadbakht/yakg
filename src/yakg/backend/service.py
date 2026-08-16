@@ -5,23 +5,28 @@ supports both. Which one is in charge is decided at runtime, never assumed:
 systemd is used only when it is actually PID 1, because ``systemctl`` is present
 and partially functional even inside containers where it cannot manage anything.
 
-Milestone 1 implements detection and status only. The state-changing operations
-are declared here but not implemented, because doing so safely requires the
-privileged helper and polkit policy planned for Milestone 2. They raise rather
-than pretending to work.
+Privileges come from systemd's existing polkit actions
+(``org.freedesktop.systemd1.manage-units`` and ``manage-unit-files``). YAKG
+ships no helper binary and no policy file: ``systemctl`` asks PID 1 over D-Bus,
+and the session agent prompts. The SysV path uses ``pkexec`` instead, because
+the init script has no polkit integration of its own. That path is unverified
+on a live SysV host; see ``docs/kerio-facts.md``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from yakg.backend.classify import outcome_from_result
 from yakg.backend.constants import (
     DAEMON_PROCESS_NAME,
     SYSTEMD_UNIT,
     SYSVINIT_SCRIPT,
+    UPDATE_RC_D,
 )
-from yakg.backend.process import CommandResult, run
+from yakg.backend.process import CONTROL_TIMEOUT_SECONDS, CommandResult, run
+from yakg.models.action import ActionOutcome
 from yakg.models.service import ServiceBackendKind, ServiceState
 from yakg.utils.logging import get_logger
 
@@ -109,13 +114,25 @@ def parse_pgrep(result: CommandResult) -> bool | None:
     return None
 
 
-class ServiceBackend:
-    """Common interface over an init system.
+#: Human-readable toasts. Keys are the init-system verbs.
+_SUCCESS = {
+    "start": "Started the Kerio VPN service.",
+    "stop": "Stopped the Kerio VPN service.",
+    "restart": "Restarted the Kerio VPN service.",
+    "enable": "The Kerio VPN service will start at boot.",
+    "disable": "The Kerio VPN service will not start at boot.",
+}
+_FAILURE = {
+    "start": "Could not start the Kerio VPN service.",
+    "stop": "Could not stop the Kerio VPN service.",
+    "restart": "Could not restart the Kerio VPN service.",
+    "enable": "Could not enable the Kerio VPN service at boot.",
+    "disable": "Could not disable the Kerio VPN service at boot.",
+}
 
-    Subclasses implement status reporting. The control operations are shared
-    here so that every backend reports the same, honest "not yet implemented"
-    for Milestone 2 work.
-    """
+
+class ServiceBackend:
+    """Common interface over an init system."""
 
     kind: ServiceBackendKind = ServiceBackendKind.NONE
 
@@ -128,28 +145,20 @@ class ServiceBackend:
     def get_status(self) -> ServiceState:
         raise NotImplementedError
 
-    # Milestone 2. These need a privileged helper invoked through polkit; until
-    # that exists, failing loudly is better than a button that quietly does
-    # nothing.
-    def _unimplemented(self, operation: str) -> NotImplementedError:
-        return NotImplementedError(
-            f"{operation} requires the privileged helper planned for Milestone 2."
-        )
+    def start(self) -> ActionOutcome:
+        raise NotImplementedError
 
-    def start(self) -> None:
-        raise self._unimplemented("Starting the service")
+    def stop(self) -> ActionOutcome:
+        raise NotImplementedError
 
-    def stop(self) -> None:
-        raise self._unimplemented("Stopping the service")
+    def restart(self) -> ActionOutcome:
+        raise NotImplementedError
 
-    def restart(self) -> None:
-        raise self._unimplemented("Restarting the service")
+    def enable(self) -> ActionOutcome:
+        raise NotImplementedError
 
-    def enable(self) -> None:
-        raise self._unimplemented("Enabling the service at boot")
-
-    def disable(self) -> None:
-        raise self._unimplemented("Disabling the service at boot")
+    def disable(self) -> ActionOutcome:
+        raise NotImplementedError
 
 
 class SystemdBackend(ServiceBackend):
@@ -219,6 +228,32 @@ class SystemdBackend(ServiceBackend):
             detail=detail,
         )
 
+    def start(self) -> ActionOutcome:
+        return self._run_systemctl("start")
+
+    def stop(self) -> ActionOutcome:
+        return self._run_systemctl("stop")
+
+    def restart(self) -> ActionOutcome:
+        return self._run_systemctl("restart")
+
+    def enable(self) -> ActionOutcome:
+        return self._run_systemctl("enable")
+
+    def disable(self) -> ActionOutcome:
+        return self._run_systemctl("disable")
+
+    def _run_systemctl(self, verb: str) -> ActionOutcome:
+        result = run(
+            ["systemctl", verb, self.unit_name],
+            timeout=CONTROL_TIMEOUT_SECONDS,
+        )
+        return outcome_from_result(
+            result,
+            success_message=_SUCCESS[verb],
+            failure_message=_FAILURE[verb],
+        )
+
 
 class SysVInitBackend(ServiceBackend):
     """Status from the init script, the process table and the runlevel links.
@@ -284,6 +319,46 @@ class SysVInitBackend(ServiceBackend):
                 return True
         return False if seen_any_dir else None
 
+    def start(self) -> ActionOutcome:
+        return self._run_init_script("start")
+
+    def stop(self) -> ActionOutcome:
+        return self._run_init_script("stop")
+
+    def restart(self) -> ActionOutcome:
+        return self._run_init_script("restart")
+
+    def enable(self) -> ActionOutcome:
+        return self._run_update_rc("enable")
+
+    def disable(self) -> ActionOutcome:
+        return self._run_update_rc("disable")
+
+    def _run_init_script(self, verb: str) -> ActionOutcome:
+        # pkexec is required because the init script has no polkit integration.
+        # The argument vector is fixed: the script path from this backend and a
+        # verb from the set the vendor script itself documents.
+        result = run(
+            ["pkexec", str(self.script_path), verb],
+            timeout=CONTROL_TIMEOUT_SECONDS,
+        )
+        return outcome_from_result(
+            result,
+            success_message=_SUCCESS[verb],
+            failure_message=_FAILURE[verb],
+        )
+
+    def _run_update_rc(self, verb: str) -> ActionOutcome:
+        result = run(
+            ["pkexec", str(UPDATE_RC_D), self.script_path.name, verb],
+            timeout=CONTROL_TIMEOUT_SECONDS,
+        )
+        return outcome_from_result(
+            result,
+            success_message=_SUCCESS[verb],
+            failure_message=_FAILURE[verb],
+        )
+
 
 class NullBackend(ServiceBackend):
     """Used when no supported init system is available."""
@@ -301,6 +376,28 @@ class NullBackend(ServiceBackend):
                 "Neither systemd nor a SysV init script for the Kerio service "
                 "was found, so its state cannot be determined."
             ),
+        )
+
+    def start(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def stop(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def restart(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def enable(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def disable(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def _unavailable(self) -> ActionOutcome:
+        return ActionOutcome(
+            ok=False,
+            message="Could not find a supported init system for the Kerio service.",
+            detail=("Neither systemd nor a SysV init script for the Kerio service was found."),
         )
 
 
@@ -366,17 +463,28 @@ class ServiceManager:
         )
         return state
 
-    def start_service(self) -> None:
-        self.backend.start()
+    def start_service(self) -> ActionOutcome:
+        return self._run("start", self.backend.start)
 
-    def stop_service(self) -> None:
-        self.backend.stop()
+    def stop_service(self) -> ActionOutcome:
+        return self._run("stop", self.backend.stop)
 
-    def restart_service(self) -> None:
-        self.backend.restart()
+    def restart_service(self) -> ActionOutcome:
+        return self._run("restart", self.backend.restart)
 
-    def enable_service(self) -> None:
-        self.backend.enable()
+    def enable_service(self) -> ActionOutcome:
+        return self._run("enable", self.backend.enable)
 
-    def disable_service(self) -> None:
-        self.backend.disable()
+    def disable_service(self) -> ActionOutcome:
+        return self._run("disable", self.backend.disable)
+
+    def _run(self, operation: str, action: Callable[[], ActionOutcome]) -> ActionOutcome:
+        outcome = action()
+        log.info(
+            "Service %s: ok=%s cancelled=%s via %s",
+            operation,
+            outcome.ok,
+            outcome.cancelled,
+            self.backend.kind.value,
+        )
+        return outcome

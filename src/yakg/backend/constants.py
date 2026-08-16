@@ -51,6 +51,10 @@ SYSTEMD_UNIT_ALIASES: Final[tuple[str, ...]] = (
 #: SysV init script, shipped alongside the systemd unit.
 SYSVINIT_SCRIPT: Final = Path("/etc/init.d/kerio-kvc")
 
+#: Debian helper used to enable or disable a SysV service at boot. The SysV
+#: control path is unverified on a live SysV host; see docs/kerio-facts.md.
+UPDATE_RC_D: Final = Path("/usr/sbin/update-rc.d")
+
 #: Passed to the daemon as its working directory; holds the logs symlink.
 RUNTIME_DIR: Final = Path("/var/lib/kerio-control-vpn")
 

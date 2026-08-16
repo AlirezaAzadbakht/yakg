@@ -25,6 +25,10 @@ log = get_logger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
+#: Service control can wait on a human typing a password into the polkit
+#: agent, so it needs far longer than a status probe.
+CONTROL_TIMEOUT_SECONDS = 120.0
+
 # Distinguishable from any real exit status, which is 0-255.
 RETURNCODE_NOT_EXECUTED = -1
 RETURNCODE_TIMED_OUT = -2
@@ -91,14 +95,26 @@ def run(
     log.debug("Running: %s", redact(" ".join(command)))
 
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=input_text,
-            check=False,
-        )
+        # stdin is closed unless the caller has something to send. Inheriting
+        # the terminal would let a command block on an unexpected prompt.
+        if input_text is None:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                input=input_text,
+                check=False,
+            )
     except subprocess.TimeoutExpired:
         log.warning("Timed out after %ss: %s", timeout, redact(" ".join(command)))
         return CommandResult(

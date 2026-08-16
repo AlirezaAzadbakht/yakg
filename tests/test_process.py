@@ -87,6 +87,21 @@ def test_permission_error_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Not permitted" in result.error
 
 
+def test_stdin_is_closed_when_no_input_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=["true"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    run(["true"])
+
+    assert captured.get("stdin") is subprocess.DEVNULL
+    assert captured.get("shell", False) is False
+
+
 def test_input_is_written_to_stdin() -> None:
     # Secrets travel this way rather than through argv, which /proc exposes.
     result = run(["cat"], input_text="from stdin")
