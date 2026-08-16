@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=YAKG
+GenericName=Kerio VPN Client
+Comment=Manage the Kerio Control VPN Client
+Exec=yakg
+Icon=network-vpn
+Terminal=false
+Categories=Network;GTK;
+Keywords=VPN;Kerio;Network;
+StartupNotify=true
