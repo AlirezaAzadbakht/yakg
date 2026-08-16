@@ -29,7 +29,7 @@ profiles, and stay in the background with a tray icon and desktop notifications.
 
 ## Screenshots
 
-Not yet available. They will be added once the interface stops changing shape.
+![YAKG main window, disconnected](docs/screenshots/main-window.png)
 
 ## Supported versions
 
