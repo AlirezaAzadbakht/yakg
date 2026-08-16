@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from yakg.models.connection import ConnectionState
+from yakg.models.connection import ConnectionInfo
 from yakg.models.installation import Installation
 from yakg.models.service import ServiceState
 
@@ -20,7 +20,7 @@ class SystemSnapshot:
 
     installation: Installation
     service: ServiceState
-    connection: ConnectionState = ConnectionState.UNKNOWN
+    connection: ConnectionInfo = field(default_factory=ConnectionInfo)
 
     @property
     def usable(self) -> bool:

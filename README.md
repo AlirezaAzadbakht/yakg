@@ -14,16 +14,14 @@ Kerio code. It drives the client you already have installed.
 
 ## Status
 
-Early development. **Milestones 1 and 2 are complete**: YAKG reports what is installed and
-what the service is doing, and can start, stop, restart, enable and disable that service.
-Connecting and disconnecting as a first-class concept, and real tunnel-state detection, are
-still Milestone 3.
+Early development. **Milestones 1–3 are complete**: YAKG can detect the client, control the
+service, connect and disconnect, and report whether the tunnel is actually up.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
 | 1 | Detection and status | Done |
 | 2 | Service control (start, stop, restart, enable, disable) | Done |
-| 3 | Connection control and real connection state | Not started |
+| 3 | Connection control and real connection state | Done |
 | 4 | Configuration viewing, validation and safe saving | Not started |
 | 5 | Profiles | Not started |
 | 6 | Tray, notifications, autostart | Not started |
@@ -66,16 +64,22 @@ match the system GTK, and installing it from the distribution avoids that whole 
 
 ## Usage
 
-Launch `yakg`, or find *YAKG* in your applications list. The window shows whether the Kerio
-client is installed, whether its service exists, whether it is running, and whether it starts at
-boot.
+Launch `yakg`, or find *YAKG* in your applications list.
 
-The primary button starts or stops the service. *Start at boot* is a switch in the System
-group. Restart is in the header menu. Each of those asks for administrator authentication
-through the normal GNOME password dialog; dismissing the dialog cancels the action and is not
-treated as an error.
+The primary button is **Connect**, **Cancel**, or **Disconnect**:
 
-Press the refresh button, or Ctrl+R, to re-check.
+- Connect starts the Kerio service. The window shows *Connecting…* and the button becomes
+  Cancel until the Kerio log reports a live tunnel, or you cancel (which stops the service).
+  If the tunnel is not up after about 45 seconds, YAKG says so and leaves the service running
+  so the client can keep retrying.
+- Disconnect (and Cancel) stop the service. There is no separate Kerio connect command.
+- *Start at boot* is a switch in the System group. Restart is in the header menu.
+
+Each privileged action asks for administrator authentication through the normal GNOME
+password dialog; dismissing the dialog cancels the action and is not treated as an error.
+
+While the window is open, YAKG re-checks every few seconds so a drop becomes visible without
+a click. Press the refresh button, or Ctrl+R, to re-check immediately.
 
 For troubleshooting, or on a machine with no desktop, the same information is available as text:
 
@@ -100,6 +104,8 @@ Service
 
 Connection
   State:          Disconnected
+  Server:         not seen
+  Tunnel address: not seen
 ```
 
 `yakg --debug` turns on debug logging. Logs are written to `~/.local/state/yakg/yakg.log`.
@@ -187,6 +193,7 @@ src/yakg/
 │   ├── constants.py   verified Kerio paths and names
 │   ├── detect.py      is the client installed?
 │   ├── classify.py    maps systemctl/pkexec errors to ActionOutcome
+│   ├── connection.py  parses VpnFSM status from debug.log
 │   ├── service.py     systemd and SysV backends
 │   └── status.py      assembles one snapshot for the UI
 ├── models/            frozen dataclasses shared by both sides
@@ -214,7 +221,7 @@ what it found. A package that was removed but not purged is correctly reported a
 **The service shows "Unknown"** — YAKG could not determine the state, which is different from
 knowing it is stopped. Open *Technical details* for the raw command output. The usual cause is
 systemd being installed but not running as PID 1, which happens in containers and WSL. The
-Start/Stop button is disabled in that case; Restart remains available.
+Connect button is disabled in that case; Restart remains available.
 
 **Nothing happens after I close the password dialog** — that is intentional. Dismissing the
 authentication prompt cancels the action and is not treated as an error.
@@ -223,17 +230,22 @@ authentication prompt cancels the action and is not treated as an error.
 this session. On GNOME the agent is provided by gnome-shell; a headless or remote session will
 not have one.
 
-**Connection state is "Unknown" even though I am connected** — expected in this release.
-Determining a live tunnel needs facts that have not been verified yet; see the unresolved section
-of [docs/kerio-facts.md](docs/kerio-facts.md). YAKG will report "Disconnected" only when it is
-certain, which is when the service is stopped.
+**"Could not connect to the VPN"** — the service started but the Kerio log did not report a
+live tunnel within about 45 seconds. The service is left running so the client can keep
+retrying. Open *Technical details* for the last VpnFSM line. Cancel stops the service.
+
+**Connection stays on Connecting…** — the daemon retries every 30 seconds after an error.
+That is still Connecting, not Disconnected. The last error, when known, is shown under the
+status.
 
 **The window will not start** — run `yakg` from a terminal. Missing GTK bindings produce an
 explanation and the apt command that fixes it.
 
 ## Known limitations
 
-- Connection state is only reported when the service is stopped; otherwise it is "Unknown".
+- Tunnel state comes from the Kerio `debug.log` VpnFSM lines, not from a network interface.
+  The interface name when connected is still unknown.
+- A 45-second connect timeout does not stop the service; the client keeps retrying.
 - The SysV control path (`pkexec` on the init script and `update-rc.d`) is unverified on a
   live SysV host.
 - No configuration editing, no profiles, no tray icon, no notifications.

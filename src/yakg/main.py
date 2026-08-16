@@ -77,9 +77,15 @@ def format_report(snapshot: SystemSnapshot) -> str:
         "",
         "Connection",
         f"  State:          {snapshot.connection.label}",
+        f"  Server:         {snapshot.connection.server_display or 'not seen'}",
+        f"  Tunnel address: {snapshot.connection.local_ip or 'not seen'}",
     ]
+    if snapshot.connection.last_error:
+        lines.append(f"  Last error:     {snapshot.connection.last_error}")
 
-    notes = [note for note in (installation.detail, service.detail) if note]
+    notes = [
+        note for note in (installation.detail, service.detail, snapshot.connection.detail) if note
+    ]
     if notes:
         lines.extend(["", "Notes"])
         lines.extend(f"  {note}" for note in notes)

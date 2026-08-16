@@ -11,6 +11,7 @@ from yakg.main import format_report
 from yakg.models.connection import ConnectionState
 from yakg.models.installation import Installation
 from yakg.models.service import ServiceBackendKind, ServiceState
+from yakg.models.snapshot import SystemSnapshot
 
 UNIT_LISTING = "kerio-kvc.service                              disabled enabled\n"
 
@@ -20,34 +21,30 @@ SERVICE_FOUND = ServiceState(exists=True, backend=ServiceBackendKind.SYSTEMD)
 
 class TestInferConnectionState:
     def test_stopped_service_means_definitely_disconnected(self) -> None:
-        # The daemon connects by itself when it starts, so no daemon means no
-        # tunnel. That much can be stated with confidence.
-        state = infer_connection_state(
+        info = infer_connection_state(
             INSTALLED,
             ServiceState(exists=True, backend=ServiceBackendKind.SYSTEMD, active=False),
         )
 
-        assert state is ConnectionState.DISCONNECTED
+        assert info.state is ConnectionState.DISCONNECTED
 
-    def test_running_service_is_not_assumed_to_be_connected(self) -> None:
-        # A running daemon may still be retrying or failing to authenticate.
-        # Confirming a live tunnel needs Milestone 3 facts.
-        state = infer_connection_state(
+    def test_running_service_without_fsm_is_connecting(self) -> None:
+        info = infer_connection_state(
             INSTALLED,
             ServiceState(exists=True, backend=ServiceBackendKind.SYSTEMD, active=True),
         )
 
-        assert state is ConnectionState.UNKNOWN
+        assert info.state is ConnectionState.CONNECTING
 
     def test_indeterminate_service_state_stays_unknown(self) -> None:
-        state = infer_connection_state(INSTALLED, SERVICE_FOUND)
+        info = infer_connection_state(INSTALLED, SERVICE_FOUND)
 
-        assert state is ConnectionState.UNKNOWN
+        assert info.state is ConnectionState.UNKNOWN
 
     def test_missing_client_is_unknown_not_disconnected(self) -> None:
-        state = infer_connection_state(Installation(installed=False), ServiceState(exists=False))
+        info = infer_connection_state(Installation(installed=False), ServiceState(exists=False))
 
-        assert state is ConnectionState.UNKNOWN
+        assert info.state is ConnectionState.UNKNOWN
 
 
 class TestGatherStatus:
@@ -75,7 +72,7 @@ class TestGatherStatus:
         assert snapshot.installation.installed
         assert snapshot.service.exists
         assert snapshot.service.active is False
-        assert snapshot.connection is ConnectionState.DISCONNECTED
+        assert snapshot.connection.state is ConnectionState.DISCONNECTED
         assert snapshot.usable
 
 
@@ -101,8 +98,6 @@ class TestFormatReport:
         assert "Disconnected" in report
 
     def test_report_is_readable_when_nothing_is_installed(self) -> None:
-        from yakg.models.snapshot import SystemSnapshot
-
         report = format_report(
             SystemSnapshot(
                 installation=Installation(installed=False, detail="Nothing found."),

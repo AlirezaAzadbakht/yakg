@@ -7,9 +7,10 @@ path be exercised from a terminal and from tests.
 
 from __future__ import annotations
 
+from yakg.backend.connection import read_connection_logs
 from yakg.backend.detect import detect_client
 from yakg.backend.service import ServiceManager
-from yakg.models.connection import ConnectionState
+from yakg.models.connection import ConnectionInfo, ConnectionState
 from yakg.models.installation import Installation
 from yakg.models.service import ServiceState
 from yakg.models.snapshot import SystemSnapshot
@@ -18,34 +19,85 @@ from yakg.utils.logging import get_logger
 log = get_logger(__name__)
 
 
-def infer_connection_state(installation: Installation, service: ServiceState) -> ConnectionState:
-    """Infer as much about the tunnel as can be justified.
+def infer_connection_state(
+    installation: Installation,
+    service: ServiceState,
+    info: ConnectionInfo | None = None,
+) -> ConnectionInfo:
+    """Combine service liveness with the last VpnFSM status.
 
-    The Kerio daemon establishes the connection itself, from its configuration,
-    as soon as it starts; there is no separate connect step (see
-    ``docs/kerio-facts.md``). So a stopped service means there is definitely no
-    tunnel, and that much can be reported confidently.
-
-    The converse does not hold. A running daemon may still be retrying, or
-    failing to authenticate. Confirming a live tunnel needs connection facts
-    that have not been verified yet, so this reports ``UNKNOWN`` instead of
-    guessing. Milestone 3 replaces this function with a real check.
+    A stopped service is disconnected even if the log still says ``(connected)``
+    from a previous run. A running service whose last FSM status is ``error``
+    is still connecting: the daemon retries every 30 seconds.
     """
-    if not installation.installed or not service.exists:
-        return ConnectionState.UNKNOWN
+    parsed = info if info is not None else ConnectionInfo()
+
+    if not installation.installed:
+        return ConnectionInfo(state=ConnectionState.UNKNOWN, detail=parsed.detail)
+
+    if not service.exists:
+        return ConnectionInfo(state=ConnectionState.UNKNOWN, detail=parsed.detail)
+
     if service.active is False:
-        return ConnectionState.DISCONNECTED
-    return ConnectionState.UNKNOWN
+        return ConnectionInfo(
+            state=ConnectionState.DISCONNECTED,
+            server=parsed.server,
+            port=parsed.port,
+            last_error=parsed.last_error,
+            fsm=parsed.fsm,
+            detail=parsed.detail,
+        )
+
+    if service.active is None:
+        return ConnectionInfo(
+            state=ConnectionState.UNKNOWN,
+            server=parsed.server,
+            port=parsed.port,
+            last_error=parsed.last_error,
+            fsm=parsed.fsm,
+            detail=parsed.detail,
+        )
+
+    if parsed.fsm == "connected":
+        state = ConnectionState.CONNECTED
+        local_ip = parsed.local_ip
+        last_error = ""
+    else:
+        # running + connected-not-yet, disconnecting, error, or disconnected
+        # (the daemon reconnects while persistent/active). All of these are
+        # Connecting from the user's point of view.
+        state = ConnectionState.CONNECTING
+        local_ip = None
+        last_error = parsed.last_error
+
+    return ConnectionInfo(
+        state=state,
+        server=parsed.server,
+        port=parsed.port,
+        local_ip=local_ip,
+        last_error=last_error,
+        fsm=parsed.fsm,
+        detail=parsed.detail,
+    )
 
 
 def gather_status(manager: ServiceManager | None = None) -> SystemSnapshot:
-    """Detect the client, the service and, as far as possible, the connection.
+    """Detect the client, the service and the connection.
 
     Blocking. Callers on the GTK main thread must run this on a worker thread.
+    Never opens the Kerio configuration file.
     """
     installation = detect_client()
     service = (manager if manager is not None else ServiceManager()).get_service_status()
-    connection = infer_connection_state(installation, service)
+    parsed = read_connection_logs(installation.log_dir)
+    connection = infer_connection_state(installation, service, parsed)
+
+    log.info(
+        "Connection: state=%s fsm=%s server=%s",
+        connection.state.value,
+        connection.fsm or "-",
+        connection.server or "-",
+    )
 
     return SystemSnapshot(
         installation=installation,

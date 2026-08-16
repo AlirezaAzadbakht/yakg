@@ -161,39 +161,98 @@ no user-visible benefit.
 
 ## Logs
 
-Provenance: vendor README, plus the on-disk directory.
+Provenance: vendor README, plus the on-disk directory on 2026-08-16.
 
 Directory `/var/log/kerio-kvc/`, mode `0755`, files mode `0644` — readable
-without root, which is why YAKG can offer a log viewer with no privilege
-escalation.
+without root.
 
-| File | Contents |
-| --- | --- |
-| `init.log` | Daemon start and stop. |
-| `error.log` | Critical errors. |
-| `debug.log` | Detailed status and error messages. |
+| File | Present on the reference machine | Contents |
+| --- | --- | --- |
+| `init.log` | **No.** The vendor README names it; it was not created. | Daemon start and stop, if present. |
+| `error.log` | Yes | Critical errors. |
+| `debug.log` | Yes | Detailed status, including VpnFSM. |
 
 Sibling `.idx` files exist next to the logs; they are an internal index and
 YAKG ignores them. `/var/lib/kerio-control-vpn/logs` is a symlink to this
 directory, created by the init script and the systemd generator.
 
+### Line format
+
+Verified from `debug.log` and `error.log`:
+
+```
+[16/Aug/2026 11:29:55] {channel} message
+```
+
+`error.log` uses the same timestamp but a `main:` / `libVPN:` / `vpncore:` prefix
+instead of `{channel}`.
+
+### Connection-state markers
+
+`{engine}` VpnFSM is the source of truth. Observed terminal lines:
+
+```
+VpnFSM: Saving and sending status to Engine (connected).
+VpnFSM: Saving and sending status to Engine (disconnected).
+VpnFSM: Saving and sending status to Engine (error).
+VpnFSM: Sending status to Engine (disconnecting).
+```
+
+A successful connect, in order:
+
+```
+VpnFSM: Connect().
+VPNClient[0001] - connecting to HOST:PORT, username …
+VPNClient[0001] - SSL connection successfully established
+Creating new VPN connection: local IP A.B.C.D/…, DNS …
+Callback StatusChanged called from libVpn(connected).
+VpnFSM: Saving and sending status to Engine (connected).
+```
+
+Session markers on `{info}`:
+
+```
+Kerio Control VPN Client Service 9.6.1 patch 1 build 9306 started.
+Kerio Control VPN Client Service 9.6.1 patch 1 build 9306 stopped.
+```
+
+State must be taken from lines **after the last `started.`**. A stopped service
+is disconnected even if an older `(connected)` line is still in the file.
+
+### Reconnect
+
+On failure the daemon does not stay down. Observed:
+
+```
+Callback StatusChanged called from libVpn(error 145).
+VpnFSM: Saving and sending status to Engine (error).
+WorkerThread - replan reconnect in 30s.
+VpnFSM: Connect().
+```
+
+A running service whose last FSM status is `error` is therefore still
+connecting, not disconnected.
+
+### Mapped errors
+
+From `error.log` and `libVpn(error N)` in `debug.log`:
+
+| Signal | Meaning |
+| --- | --- |
+| `145` / `Operation timeout(145)` | Operation timeout |
+| `142` / `Connection closed by a remote peer(142)` | Peer closed the connection |
+| `167` / `Unable to establish data tunnel (UDP traffic is probably blocked)(167)` | UDP tunnel failed |
+| `Network is unreachable` | No route to the server |
+| `another instance of Kerio Control VPN Client is running` | Second instance refused |
+
+The `connecting to HOST:PORT, username …` line includes a username. YAKG must
+not display or log that field.
+
 ## Unresolved
 
-These are genuinely unknown and must not be guessed. They are Milestone 3
-concerns and YAKG currently reports connection state as `UNKNOWN`.
-
-- **Network interface name when connected.** `libkvnet.so` references both
-  `/dev/kvnet` (its own kernel module) and `/dev/net/tun`, so the interface may
-  differ depending on which path the driver takes. The reference machine has no
-  `kvnet` module loaded and the daemon was not running, so no interface could be
-  observed. Determine this from a live connection before relying on it.
-- **`debug.log` line format.** The binary contains several timestamp formats
-  (`%04d-%02d-%02d %02d:%02d:%02d` and an ISO-8601 variant), so the actual log
-  prefix must be confirmed against a real file before a parser is written.
-- **Connection-state log markers.** `Connection established successfully` and
-  `Creating new VPN connection: local IP ..., DNS ...` exist in the binary and
-  look promising as state signals, but their exact surrounding format has not
-  been observed in a real log.
+- **Network interface name when connected.** Logs only report `ifIndex = N` and
+  a MAC. `libkvnet.so` references both `/dev/kvnet` and `/dev/net/tun`. Do not
+  invent a name such as `kvnet0`.
 - **Behaviour of multiple `<connection>` elements.** The vendor README states
   that only one VPN connection at a time is supported, and the wizard writes
   exactly one element. Whether additional elements are tolerated or rejected is

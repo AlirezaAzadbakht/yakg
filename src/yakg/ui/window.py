@@ -1,7 +1,7 @@
 """The YAKG main window.
 
-Shows what is installed, what the service is doing, and the controls to start,
-stop, restart, enable and disable it.
+Shows connection state and the controls to connect, cancel, disconnect, and
+manage the Kerio service at boot.
 
 Two rules shape this module. Nothing here executes a system command; it calls
 the backend instead. And nothing blocks the main loop: detection and service
@@ -11,6 +11,7 @@ actions run on a worker thread and results come back through ``GLib.idle_add``.
 from __future__ import annotations
 
 import threading
+import time
 
 import gi
 
@@ -31,6 +32,10 @@ log = get_logger(__name__)
 
 #: Returned from an idle callback so it runs once and is then dropped.
 _DONE: bool = GLib.SOURCE_REMOVE
+
+CONNECT_TIMEOUT_SECONDS = 45.0
+CONNECT_POLL_MS = 1000
+WATCH_SECONDS = 4
 
 #: Bullets matching the states in the product sketch: filled when connected,
 #: hollow when not, dotted while in transition.
@@ -54,13 +59,11 @@ _INSTALL_HINT = (
     "then refresh."
 )
 
-_UNKNOWN_SERVICE_HINT = (
-    "The service state is unknown, so it cannot be started or stopped from here."
-)
+_UNKNOWN_SERVICE_HINT = "The service state is unknown, so the VPN cannot be connected from here."
 
 
 class YakgWindow(Adw.ApplicationWindow):
-    """Main window: status, a primary Start/Stop button, and a boot switch."""
+    """Main window: connection status, Connect/Cancel/Disconnect, boot switch."""
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -70,6 +73,11 @@ class YakgWindow(Adw.ApplicationWindow):
 
         self._refreshing = False
         self._busy = False
+        self._awaiting_connect = False
+        self._connect_deadline = 0.0
+        self._connect_poll_id = 0
+        self._watch_id = 0
+        self._pending_operation = ""
         self._snapshot: SystemSnapshot | None = None
         self._action_detail = ""
 
@@ -88,7 +96,16 @@ class YakgWindow(Adw.ApplicationWindow):
         self.set_content(toolbar)
 
         self._stack.set_visible_child_name("loading")
+        self._watch_id = GLib.timeout_add_seconds(WATCH_SECONDS, self._on_watch_tick)
         self.refresh()
+
+    def do_close_request(self) -> bool:
+        self._stop_connect_poll()
+        if self._watch_id:
+            GLib.source_remove(self._watch_id)
+            self._watch_id = 0
+        result: bool = bool(Adw.ApplicationWindow.do_close_request(self))
+        return result
 
     def _add_window_actions(self) -> None:
         self._restart_action = Gio.SimpleAction.new("restart", None)
@@ -160,7 +177,7 @@ class YakgWindow(Adw.ApplicationWindow):
         self._connection_hint.set_margin_bottom(8)
 
         self._action_spinner = Gtk.Spinner(visible=False)
-        self._action_label = Gtk.Label(label="Start")
+        self._action_label = Gtk.Label(label="Connect")
         action_contents = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
             spacing=8,
@@ -249,6 +266,10 @@ class YakgWindow(Adw.ApplicationWindow):
         self._refreshing = False
         self._snapshot = snapshot
 
+        if self._awaiting_connect and snapshot.connection.state is ConnectionState.CONNECTED:
+            self._awaiting_connect = False
+            self._stop_connect_poll()
+
         if snapshot.installation.installed:
             self._apply(snapshot)
             self._stack.set_visible_child_name("status")
@@ -266,24 +287,43 @@ class YakgWindow(Adw.ApplicationWindow):
         self._refreshing = False
         self._set_controls_sensitive(True)
 
-        # The human-readable half goes in the toast; the technical half stays in
-        # the details view and the log, never in a raw traceback dialog.
         self._show_toast("Could not check the system state.")
         self._technical_text.set_label(message)
         self._stack.set_visible_child_name("status")
 
         return _DONE
 
+    def _on_watch_tick(self) -> bool:
+        if self._stack.get_visible_child_name() != "status":
+            return True
+        if self._busy or self._refreshing or self._awaiting_connect:
+            return True
+        self.refresh()
+        return True
+
     # Service actions --------------------------------------------------------
 
     def restart_service(self) -> None:
         """Restart the Kerio service. Called from the header menu."""
+        self._awaiting_connect = False
+        self._stop_connect_poll()
         self._run_action("restart")
 
     def _on_primary_clicked(self, _button: Gtk.Button) -> None:
-        if self._snapshot is None or self._snapshot.service.active is None:
+        if self._snapshot is None:
             return
-        self._run_action("stop" if self._snapshot.service.active else "start")
+        state = self._snapshot.connection.state
+        if state is ConnectionState.CONNECTED:
+            self._run_action("stop")
+            return
+        if state is ConnectionState.CONNECTING or self._awaiting_connect:
+            self._awaiting_connect = False
+            self._stop_connect_poll()
+            self._run_action("stop")
+            return
+        if self._snapshot.service.active is None and self._snapshot.service.exists:
+            return
+        self._run_action("start")
 
     def _on_boot_toggled(self, row: Adw.SwitchRow, _pspec: GObject.ParamSpec) -> None:
         if self._busy or self._refreshing:
@@ -295,6 +335,7 @@ class YakgWindow(Adw.ApplicationWindow):
             return
 
         self._busy = True
+        self._pending_operation = operation
         self._set_controls_sensitive(False)
         self._action_spinner.set_visible(True)
         self._action_spinner.start()
@@ -326,31 +367,66 @@ class YakgWindow(Adw.ApplicationWindow):
                 message="Could not complete the request.",
                 detail=str(error),
             )
-        GLib.idle_add(self._on_action_done, outcome)
+        GLib.idle_add(self._on_action_done, operation, outcome)
 
-    def _on_action_done(self, outcome: ActionOutcome) -> bool:
+    def _on_action_done(self, operation: str, outcome: ActionOutcome) -> bool:
         self._busy = False
+        self._pending_operation = ""
         self._action_spinner.stop()
         self._action_spinner.set_visible(False)
 
         if outcome.cancelled:
             self._action_detail = ""
+            self._awaiting_connect = False
+            self._stop_connect_poll()
+        elif operation == "start" and outcome.ok:
+            self._action_detail = ""
+            self._awaiting_connect = True
+            self._connect_deadline = time.monotonic() + CONNECT_TIMEOUT_SECONDS
+            self._start_connect_poll()
         else:
-            if outcome.message:
+            if outcome.ok and operation == "stop":
+                self._show_toast("Disconnected.")
+            elif outcome.message:
                 self._show_toast(outcome.message)
             self._action_detail = outcome.detail if not outcome.ok else ""
+            self._awaiting_connect = False
+            self._stop_connect_poll()
 
-        # Re-read so the displayed state comes from the system, not a guess.
         self.refresh()
         return _DONE
+
+    def _start_connect_poll(self) -> None:
+        self._stop_connect_poll()
+        self._connect_poll_id = GLib.timeout_add(CONNECT_POLL_MS, self._on_connect_poll_tick)
+
+    def _stop_connect_poll(self) -> None:
+        if self._connect_poll_id:
+            GLib.source_remove(self._connect_poll_id)
+            self._connect_poll_id = 0
+
+    def _on_connect_poll_tick(self) -> bool:
+        if not self._awaiting_connect:
+            self._connect_poll_id = 0
+            return False
+        if time.monotonic() >= self._connect_deadline:
+            self._awaiting_connect = False
+            self._connect_poll_id = 0
+            self._show_toast("Could not connect to the VPN.")
+            self.refresh()
+            return False
+        if not self._refreshing and not self._busy:
+            self.refresh()
+        return True
 
     # Presentation -----------------------------------------------------------
 
     def _apply(self, snapshot: SystemSnapshot) -> None:
         installation = snapshot.installation
         service = snapshot.service
+        connection = snapshot.connection
+        state = connection.state
 
-        state = snapshot.connection
         self._connection_mark.set_label(_CONNECTION_MARK[state])
         self._connection_label.set_label(state.label)
         for widget in (self._connection_mark, self._connection_label):
@@ -358,15 +434,17 @@ class YakgWindow(Adw.ApplicationWindow):
                 widget.remove_css_class(style)
             widget.add_css_class(_CONNECTION_STYLE[state])
 
-        self._connection_hint.set_label(
-            "Connection status is not yet available; YAKG can currently report "
-            "the service state only."
-            if state is ConnectionState.UNKNOWN
-            else ""
-        )
-        self._connection_hint.set_visible(state is ConnectionState.UNKNOWN)
+        hint_parts: list[str] = []
+        if connection.server_display:
+            hint_parts.append(f"Server: {connection.server_display}")
+        if connection.local_ip and state is ConnectionState.CONNECTED:
+            hint_parts.append(connection.local_ip)
+        if connection.last_error and state is ConnectionState.CONNECTING:
+            hint_parts.append(connection.last_error)
+        self._connection_hint.set_label("\n".join(hint_parts))
+        self._connection_hint.set_visible(bool(hint_parts))
 
-        self._update_primary_button(service.active)
+        self._update_primary_button(state, service.active)
 
         self._client_row.set_subtitle(f"Version {installation.version_display}")
         self._config_row.set_subtitle(
@@ -395,31 +473,49 @@ class YakgWindow(Adw.ApplicationWindow):
 
         self._set_controls_sensitive(True)
 
-    def _update_primary_button(self, active: bool | None) -> None:
+    def _update_primary_button(self, state: ConnectionState, active: bool | None) -> None:
         self._action_button.remove_css_class("suggested-action")
         self._action_button.remove_css_class("destructive-action")
 
-        if active is True:
-            self._action_label.set_label("Stop")
+        if state is ConnectionState.CONNECTED:
+            self._action_label.set_label("Disconnect")
             self._action_button.add_css_class("destructive-action")
             self._action_hint.set_visible(False)
-        elif active is False:
-            self._action_label.set_label("Start")
-            self._action_button.add_css_class("suggested-action")
+        elif state is ConnectionState.CONNECTING or self._awaiting_connect:
+            self._action_label.set_label("Cancel")
+            self._action_button.add_css_class("destructive-action")
             self._action_hint.set_visible(False)
-        else:
-            self._action_label.set_label("Start")
+        elif active is None:
+            self._action_label.set_label("Connect")
             self._action_button.add_css_class("suggested-action")
             self._action_hint.set_label(_UNKNOWN_SERVICE_HINT)
             self._action_hint.set_visible(True)
+        else:
+            self._action_label.set_label("Connect")
+            self._action_button.add_css_class("suggested-action")
+            self._action_hint.set_visible(False)
 
     def _set_controls_sensitive(self, sensitive: bool) -> None:
         blocked = not sensitive or self._busy or self._refreshing
         service = self._snapshot.service if self._snapshot is not None else None
-
-        can_toggle = (
-            not blocked and service is not None and service.exists and service.active is not None
+        state = (
+            self._snapshot.connection.state
+            if self._snapshot is not None
+            else ConnectionState.UNKNOWN
         )
+
+        known = state in {
+            ConnectionState.CONNECTED,
+            ConnectionState.CONNECTING,
+            ConnectionState.DISCONNECTED,
+        }
+        can_toggle = (
+            not blocked
+            and service is not None
+            and service.exists
+            and (known or self._awaiting_connect or service.active is False)
+        )
+
         can_restart = not blocked and service is not None and service.exists
         can_boot = (
             not blocked
@@ -441,6 +537,7 @@ def _technical_details(snapshot: SystemSnapshot) -> str:
     """Build the contents of the expandable details row."""
     installation = snapshot.installation
     service = snapshot.service
+    connection = snapshot.connection
 
     lines = [
         f"Executable:     {installation.executable or 'not found'}",
@@ -450,8 +547,15 @@ def _technical_details(snapshot: SystemSnapshot) -> str:
         f"Logs:           {installation.log_dir or 'not found'}",
         f"Init system:    {service.backend.label}",
         f"Service unit:   {service.unit_name or 'not found'}",
+        f"Connection:     {connection.label}",
+        f"FSM status:     {connection.fsm or 'not seen'}",
+        f"Server:         {connection.server_display or 'not seen'}",
     ]
-    for note in (installation.detail, service.detail):
+    if connection.local_ip:
+        lines.append(f"Tunnel address: {connection.local_ip}")
+    if connection.last_error:
+        lines.append(f"Last error:     {connection.last_error}")
+    for note in (installation.detail, service.detail, connection.detail):
         if note:
             lines.append(f"\n{note}")
     if service.raw:

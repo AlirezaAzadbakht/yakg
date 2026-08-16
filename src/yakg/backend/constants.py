@@ -34,8 +34,11 @@ CONFIG_CANDIDATES: Final[tuple[Path, ...]] = (Path("/etc/kerio-kvc.conf"),)
 #: World-readable, so YAKG can show logs without elevated privileges.
 LOG_DIR_CANDIDATES: Final[tuple[Path, ...]] = (Path("/var/log/kerio-kvc"),)
 
-#: Log file names inside the log directory, per the vendor README.
+#: Log file names inside the log directory. ``init.log`` is named by the vendor
+#: README but was not present on the reference machine.
 LOG_FILE_NAMES: Final[tuple[str, ...]] = ("init.log", "error.log", "debug.log")
+DEBUG_LOG_NAME: Final = "debug.log"
+ERROR_LOG_NAME: Final = "error.log"
 
 #: The canonical systemd unit.
 SYSTEMD_UNIT: Final = "kerio-kvc.service"

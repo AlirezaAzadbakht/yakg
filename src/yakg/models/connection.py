@@ -1,13 +1,8 @@
-"""VPN connection state.
-
-Only ``UNKNOWN`` is ever produced in Milestone 1. Determining a real connection
-state requires facts about the Kerio client that have not been verified yet, and
-those gaps are recorded in ``docs/kerio-facts.md``. The enum exists now so the
-user interface can be written against its final shape.
-"""
+"""VPN connection state and the details parsed from the Kerio log."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -28,3 +23,34 @@ class ConnectionState(Enum):
             ConnectionState.CONNECTED: "Connected",
             ConnectionState.UNKNOWN: "Unknown",
         }[self]
+
+
+@dataclass(frozen=True)
+class ConnectionInfo:
+    """Tunnel state plus whatever the Kerio log can justify showing.
+
+    ``state`` is decided by combining this with the service status, not by the
+    log alone: a stale ``(connected)`` line from a previous run is not a live
+    tunnel.
+    """
+
+    state: ConnectionState = ConnectionState.UNKNOWN
+    server: str | None = None
+    port: int | None = None
+    local_ip: str | None = None
+    last_error: str = ""
+    fsm: str = ""
+    detail: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.state.label
+
+    @property
+    def server_display(self) -> str:
+        """Host, with port only when it is not the default."""
+        if not self.server:
+            return ""
+        if self.port and self.port != 4090:
+            return f"{self.server}:{self.port}"
+        return self.server
