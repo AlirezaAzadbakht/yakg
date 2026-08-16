@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 
 import gi
 
@@ -26,6 +27,8 @@ from yakg.backend.activate import (
     maybe_import_first_profile,
     resolve_profile_password,
 )
+from yakg.backend.autostart import apply_start_at_login
+from yakg.backend.preferences import load_preferences, save_preferences
 from yakg.backend.profiles import default_store, get_profile
 from yakg.backend.secrets import default_secret_store
 from yakg.backend.service import ServiceManager
@@ -93,6 +96,9 @@ class YakgWindow(Adw.ApplicationWindow):
         self._import_attempted = False
         self._selected_id: str | None = None
         self._profile_ids: list[str] = []
+        self._user_stop = False
+        self._connect_timed_out = False
+        self._quitting = False
 
         self._add_window_actions()
 
@@ -113,12 +119,51 @@ class YakgWindow(Adw.ApplicationWindow):
         self.refresh()
 
     def do_close_request(self) -> bool:
+        if self._quitting:
+            return False
+        # Hide; the process and the 4s watch stay up so a drop can notify.
+        self.set_visible(False)
+        return True
+
+    @property
+    def awaiting_connect(self) -> bool:
+        return self._awaiting_connect
+
+    def shutdown_session(self) -> None:
+        """Stop timers when the application is quitting."""
+        self._quitting = True
         self._stop_connect_poll()
         if self._watch_id:
             GLib.source_remove(self._watch_id)
             self._watch_id = 0
-        result: bool = bool(Adw.ApplicationWindow.do_close_request(self))
-        return result
+
+    def request_connect(self) -> None:
+        """Connect from the tray or an app action."""
+        if self._snapshot is None:
+            return
+        state = self._snapshot.connection.state
+        if state is ConnectionState.CONNECTED:
+            return
+        if state is ConnectionState.CONNECTING or self._awaiting_connect:
+            return
+        if self._snapshot.service.active is None and self._snapshot.service.exists:
+            return
+        self._connect()
+
+    def request_disconnect(self) -> None:
+        """Disconnect or cancel from the tray or an app action."""
+        if self._snapshot is None:
+            return
+        state = self._snapshot.connection.state
+        if (
+            state is ConnectionState.CONNECTED
+            or state is ConnectionState.CONNECTING
+            or self._awaiting_connect
+        ):
+            self._user_stop = True
+            self._awaiting_connect = False
+            self._stop_connect_poll()
+            self._run_action("stop")
 
     def _add_window_actions(self) -> None:
         self._restart_action = Gio.SimpleAction.new("restart", None)
@@ -239,7 +284,24 @@ class YakgWindow(Adw.ApplicationWindow):
         self._service_row = Adw.ActionRow(title="Service", subtitle="Unknown")
         self._boot_row = Adw.SwitchRow(title="Start at boot")
         self._boot_handler = self._boot_row.connect("notify::active", self._on_boot_toggled)
-        for row in (self._client_row, self._config_row, self._service_row, self._boot_row):
+        self._login_row = Adw.SwitchRow(
+            title="Start YAKG at login",
+            subtitle="Open YAKG hidden after you sign in",
+        )
+        self._login_handler = self._login_row.connect("notify::active", self._on_login_toggled)
+        self._notify_row = Adw.SwitchRow(
+            title="Notifications",
+            subtitle="Desktop alerts when the tunnel goes up or drops",
+        )
+        self._notify_handler = self._notify_row.connect("notify::active", self._on_notify_toggled)
+        for row in (
+            self._client_row,
+            self._config_row,
+            self._service_row,
+            self._boot_row,
+            self._login_row,
+            self._notify_row,
+        ):
             details.add(row)
 
         technical = Adw.PreferencesGroup()
@@ -316,12 +378,24 @@ class YakgWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._on_refresh_done, snapshot)
 
     def _on_refresh_done(self, snapshot: SystemSnapshot) -> bool:
+        previous = self._snapshot
+        user_stop = self._user_stop
+        timeout = self._connect_timed_out
+        self._user_stop = False
+        self._connect_timed_out = False
         self._refreshing = False
         self._snapshot = snapshot
 
         if self._awaiting_connect and snapshot.connection.state is ConnectionState.CONNECTED:
             self._awaiting_connect = False
             self._stop_connect_poll()
+
+        self._notify_app(
+            previous,
+            snapshot,
+            user_stop=user_stop,
+            timeout=timeout,
+        )
 
         if snapshot.installation.installed:
             self._apply(snapshot)
@@ -402,9 +476,11 @@ class YakgWindow(Adw.ApplicationWindow):
             return
         state = self._snapshot.connection.state
         if state is ConnectionState.CONNECTED:
+            self._user_stop = True
             self._run_action("stop")
             return
         if state is ConnectionState.CONNECTING or self._awaiting_connect:
+            self._user_stop = True
             self._awaiting_connect = False
             self._stop_connect_poll()
             self._run_action("stop")
@@ -510,6 +586,24 @@ class YakgWindow(Adw.ApplicationWindow):
             return
         self._run_action("enable" if row.get_active() else "disable")
 
+    def _on_login_toggled(self, row: Adw.SwitchRow, _pspec: GObject.ParamSpec) -> None:
+        if self._busy or self._refreshing:
+            return
+        outcome = apply_start_at_login(row.get_active())
+        if outcome.ok:
+            return
+        if outcome.message:
+            self._show_toast(outcome.message)
+        self._login_row.handler_block(self._login_handler)
+        self._login_row.set_active(not row.get_active())
+        self._login_row.handler_unblock(self._login_handler)
+
+    def _on_notify_toggled(self, row: Adw.SwitchRow, _pspec: GObject.ParamSpec) -> None:
+        if self._busy or self._refreshing:
+            return
+        current = load_preferences()
+        save_preferences(replace(current, notifications_enabled=row.get_active()))
+
     def _run_action(self, operation: str) -> None:
         if self._busy or self._refreshing:
             return
@@ -592,7 +686,9 @@ class YakgWindow(Adw.ApplicationWindow):
         if time.monotonic() >= self._connect_deadline:
             self._awaiting_connect = False
             self._connect_poll_id = 0
-            self._show_toast("Could not connect to the VPN.")
+            self._connect_timed_out = True
+            if self.get_visible():
+                self._show_toast("Could not connect to the VPN.")
             self.refresh()
             return False
         if not self._refreshing and not self._busy:
@@ -641,6 +737,14 @@ class YakgWindow(Adw.ApplicationWindow):
         self._boot_row.set_active(service.enabled_at_boot is True)
         self._boot_row.set_subtitle(service.boot_label)
         self._boot_row.handler_unblock(self._boot_handler)
+
+        prefs = load_preferences()
+        self._login_row.handler_block(self._login_handler)
+        self._login_row.set_active(prefs.start_at_login)
+        self._login_row.handler_unblock(self._login_handler)
+        self._notify_row.handler_block(self._notify_handler)
+        self._notify_row.set_active(prefs.notifications_enabled)
+        self._notify_row.handler_unblock(self._notify_handler)
 
         if installation.needs_configuration and not snapshot.profiles.profiles:
             self._banner.set_revealed(True)
@@ -714,9 +818,31 @@ class YakgWindow(Adw.ApplicationWindow):
         self._refresh_button.set_sensitive(not blocked)
         self._action_button.set_sensitive(can_toggle)
         self._boot_row.set_sensitive(can_boot)
+        self._login_row.set_sensitive(not blocked)
+        self._notify_row.set_sensitive(not blocked)
         self._restart_action.set_enabled(can_restart)
         self._profile_row.set_sensitive(not blocked)
         self._add_profile_button.set_sensitive(not blocked)
+
+    def _notify_app(
+        self,
+        previous: SystemSnapshot | None,
+        current: SystemSnapshot,
+        *,
+        user_stop: bool,
+        timeout: bool,
+    ) -> None:
+        application = self.get_application()
+        callback = getattr(application, "on_status", None)
+        if not callable(callback):
+            return
+        callback(
+            previous,
+            current,
+            window_visible=bool(self.get_visible()),
+            user_stop=user_stop,
+            timeout=timeout,
+        )
 
     def _apply_profiles(self, state: ProfileState) -> None:
         desired = self._selected_id

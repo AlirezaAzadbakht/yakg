@@ -9,3 +9,5 @@ Terminal=false
 Categories=Network;GTK;
 Keywords=VPN;Kerio;Network;
 StartupNotify=true
+StartupWMClass=io.github.yakg.Yakg
+X-GNOME-UsesNotifications=true

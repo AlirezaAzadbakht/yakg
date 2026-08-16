@@ -14,9 +14,9 @@ Kerio code. It drives the client you already have installed.
 
 ## Status
 
-Early development. **Milestones 1–5 are complete**: YAKG can detect the client, control the
-service, connect and disconnect, report whether the tunnel is actually up, and keep
-named profiles whose passwords live in the desktop secret store.
+Early development. **Milestones 1–6 are complete**: YAKG can detect the client, control the
+service, connect and disconnect, report whether the tunnel is actually up, keep named
+profiles, and stay in the background with a tray icon and desktop notifications.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ named profiles whose passwords live in the desktop secret store.
 | 3 | Connection control and real connection state | Done |
 | 4 | Configuration viewing, validation and safe saving | Done |
 | 5 | Profiles | Done |
-| 6 | Tray, notifications, autostart | Not started |
+| 6 | Tray, notifications, autostart | Done |
 
 ## Screenshots
 
@@ -79,7 +79,19 @@ The primary button is **Connect**, **Cancel**, or **Disconnect**:
   If the tunnel is not up after about 45 seconds, YAKG says so and leaves the service running
   so the client can keep retrying.
 - Disconnect (and Cancel) stop the service. There is no separate Kerio connect command.
-- *Start at boot* is a switch in the System group. Restart is in the header menu.
+- Closing the window **hides** YAKG; **Quit** in the header menu or the tray exits.
+  While hidden, YAKG still watches the tunnel so a drop can show a desktop
+  notification. A second `yakg`, a tray click, or a notification click shows the
+  window again.
+- *Start at boot* starts the Kerio service when the computer boots. *Start YAKG
+  at login* is separate: it launches `yakg --hidden` after you sign in, and does
+  not Connect. *Notifications* controls those desktop alerts (not the in-window
+  toasts).
+- A tray icon (StatusNotifierItem) follows the connection state. Ubuntu 24.04
+  usually draws it through the AppIndicator extension
+  (`gnome-shell-extension-appindicator`). Without a StatusNotifier host the icon
+  is omitted; hide-on-close and notifications still work.
+- Restart is in the header menu.
 - The **Profile** picker chooses which named connection Connect will use. Connect writes
   that profile into the Kerio client (if it is not already the active one) and then starts
   the service. Switching the picker while connected writes the new profile and reloads.
@@ -92,8 +104,8 @@ The primary button is **Connect**, **Cancel**, or **Disconnect**:
 Each privileged action asks for administrator authentication through the normal GNOME
 password dialog; dismissing the dialog cancels the action and is not treated as an error.
 
-While the window is open, YAKG re-checks every few seconds so a drop becomes visible without
-a click. Press the refresh button, or Ctrl+R, to re-check immediately.
+YAKG re-checks every few seconds while it is running, including when the window
+is hidden. Press the refresh button, or Ctrl+R, to re-check immediately.
 
 For troubleshooting, or on a machine with no desktop, the same information is available as text:
 
@@ -125,7 +137,9 @@ Connection
   Tunnel address: not seen
 ```
 
-`yakg --debug` turns on debug logging. Logs are written to `~/.local/state/yakg/yakg.log`.
+`yakg --debug` turns on debug logging. `yakg --hidden` starts without showing the
+window (this is what login autostart uses). Logs are written to
+`~/.local/state/yakg/yakg.log`.
 
 ## Profile management
 
@@ -219,10 +233,10 @@ that the backend stays importable without a desktop stack.
 
 ```text
 src/yakg/
-├── main.py            entry point, --detect and --version
-├── app.py             GTK application, actions, accelerators
+├── main.py            entry point, --detect, --hidden and --version
+├── app.py             GTK application, actions, accelerators, hold
 ├── helper.py          privileged entry (read/write/restore); no GTK
-├── ui/                widgets; never runs a system command
+├── ui/                widgets and the SNI tray; never runs a system command
 ├── backend/
 │   ├── process.py     the only place a subprocess is spawned
 │   ├── constants.py   verified Kerio paths and names
@@ -236,6 +250,10 @@ src/yakg/
 │   ├── profiles.py    named profiles on disk; never a password
 │   ├── secrets.py     libsecret / in-memory secret store
 │   ├── activate.py    project a profile through the helper
+│   ├── preferences.py start-at-login and notification toggles
+│   ├── autostart.py   XDG autostart desktop file
+│   ├── notify.py      when to send a desktop notification
+│   ├── tray_spec.py   tray icons and menu labels; no D-Bus
 │   ├── service.py     systemd and SysV backends
 │   └── status.py      assembles one snapshot for the UI
 ├── models/            frozen dataclasses shared by both sides
@@ -283,6 +301,10 @@ status.
 **Settings or Connect says the helper is needed** — run `sudo ./packaging/install-helper.sh`
 from the source tree. Disconnect works without it. Applying a profile needs the helper.
 
+**There is no tray icon** — GNOME needs a StatusNotifier host. On Ubuntu, install and
+enable `gnome-shell-extension-appindicator`, then sign out and back in. Closing the
+window still hides YAKG, and notifications still work.
+
 **The window will not start** — run `yakg` from a terminal. Missing GTK bindings produce an
 explanation and the apt command that fixes it.
 
@@ -293,7 +315,8 @@ explanation and the apt command that fixes it.
 - A 45-second connect timeout does not stop the service; the client keeps retrying.
 - The SysV control path (`pkexec` on the init script and `update-rc.d`) is unverified on a
   live SysV host.
-- No tray icon, no notifications, no autostart (Milestone 6).
+- The tray icon needs a StatusNotifier host (on GNOME, the AppIndicator
+  extension). Vanilla GNOME without that extension has no icon.
 - Verified against exactly one Kerio version, on Ubuntu 24.04.
 - No packaging: source installation only.
 

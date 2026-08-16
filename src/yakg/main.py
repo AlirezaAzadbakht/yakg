@@ -45,6 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="enable debug logging",
     )
+    parser.add_argument(
+        "--hidden",
+        action="store_true",
+        help="start without showing the window (used by login autostart)",
+    )
     return parser
 
 
@@ -130,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     # GTK argument parsing is bypassed: YAKG's own parser has already run.
-    return int(YakgApplication().run([]))
+    return int(YakgApplication(start_hidden=args.hidden).run([]))
 
 
 if __name__ == "__main__":

@@ -190,6 +190,10 @@ Disconnect maps to stopping it. Option 2 would require a privileged write to a
 root-owned credential file on every single click, which is a far larger risk for
 no user-visible benefit.
 
+YAKG's own "Start YAKG at login" switch writes an XDG autostart desktop file
+that launches `yakg --hidden`. That does **not** start `kerio-kvc.service`.
+Kerio at boot remains the existing systemd/SysV enable path.
+
 ## Logs
 
 Provenance: vendor README, plus the on-disk directory on 2026-08-16.

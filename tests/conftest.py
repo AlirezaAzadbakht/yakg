@@ -88,9 +88,11 @@ def isolate_xdg_config(
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
-    """Keep default_store() out of the real ``~/.config/yakg``."""
+    """Keep YAKG files out of the real home, autostart, and applications dirs."""
     root = tmp_path_factory.mktemp("xdg-config")
+    data = tmp_path_factory.mktemp("xdg-data")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(root))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
     return root
 
 
