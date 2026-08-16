@@ -3,6 +3,7 @@
 from yakg.models.action import ActionOutcome
 from yakg.models.connection import ConnectionInfo, ConnectionState
 from yakg.models.installation import Installation
+from yakg.models.profile import Profile, ProfileState
 from yakg.models.service import ServiceBackendKind, ServiceState
 from yakg.models.snapshot import SystemSnapshot
 
@@ -11,6 +12,8 @@ __all__ = [
     "ConnectionInfo",
     "ConnectionState",
     "Installation",
+    "Profile",
+    "ProfileState",
     "ServiceBackendKind",
     "ServiceState",
     "SystemSnapshot",

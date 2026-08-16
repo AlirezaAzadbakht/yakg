@@ -21,10 +21,18 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 from yakg import APP_NAME
+from yakg.backend.activate import (
+    activate_profile,
+    maybe_import_first_profile,
+    resolve_profile_password,
+)
+from yakg.backend.profiles import default_store, get_profile
+from yakg.backend.secrets import default_secret_store
 from yakg.backend.service import ServiceManager
 from yakg.backend.status import gather_status
 from yakg.models.action import ActionOutcome
 from yakg.models.connection import ConnectionState
+from yakg.models.profile import Profile, ProfileState
 from yakg.models.snapshot import SystemSnapshot
 from yakg.ui.settings import SettingsWindow
 from yakg.utils.logging import get_logger
@@ -70,7 +78,7 @@ class YakgWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
 
         self.set_title(APP_NAME)
-        self.set_default_size(420, 520)
+        self.set_default_size(420, 580)
 
         self._refreshing = False
         self._busy = False
@@ -82,6 +90,9 @@ class YakgWindow(Adw.ApplicationWindow):
         self._snapshot: SystemSnapshot | None = None
         self._action_detail = ""
         self._settings: SettingsWindow | None = None
+        self._import_attempted = False
+        self._selected_id: str | None = None
+        self._profile_ids: list[str] = []
 
         self._add_window_actions()
 
@@ -199,6 +210,23 @@ class YakgWindow(Adw.ApplicationWindow):
         self._action_hint.add_css_class("dim-label")
         self._action_hint.set_margin_bottom(8)
 
+        self._profile_model = Gtk.StringList()
+        self._profile_row = Adw.ComboRow(title="Profile")
+        self._profile_row.set_model(self._profile_model)
+        self._add_profile_button = Gtk.Button(
+            icon_name="list-add-symbolic",
+            tooltip_text="Add profile",
+            valign=Gtk.Align.CENTER,
+        )
+        self._add_profile_button.add_css_class("flat")
+        self._add_profile_button.connect("clicked", lambda _button: self.open_settings(new=True))
+        self._profile_row.add_suffix(self._add_profile_button)
+        self._profile_handler = self._profile_row.connect(
+            "notify::selected", self._on_profile_changed
+        )
+        profile_group = Adw.PreferencesGroup(title="Profile")
+        profile_group.add(self._profile_row)
+
         details = Adw.PreferencesGroup(title="System")
         self._client_row = Adw.ActionRow(title="Kerio VPN Client", subtitle="Unknown")
         self._config_row = Adw.ActionRow(
@@ -238,6 +266,7 @@ class YakgWindow(Adw.ApplicationWindow):
         content.append(self._connection_hint)
         content.append(self._action_button)
         content.append(self._action_hint)
+        content.append(profile_group)
         content.append(details)
         content.append(technical)
 
@@ -257,14 +286,29 @@ class YakgWindow(Adw.ApplicationWindow):
 
         self._refreshing = True
         self._set_controls_sensitive(False)
+        try_import = not self._import_attempted
+        self._import_attempted = True
 
-        thread = threading.Thread(target=self._refresh_worker, name="yakg-detect", daemon=True)
+        thread = threading.Thread(
+            target=self._refresh_worker,
+            args=(try_import,),
+            name="yakg-detect",
+            daemon=True,
+        )
         thread.start()
 
-    def _refresh_worker(self) -> None:
+    def _refresh_worker(self, try_import: bool) -> None:
         """Runs off the main thread. Must not touch a widget."""
         try:
             snapshot = gather_status()
+            if (
+                try_import
+                and not snapshot.profiles.profiles
+                and snapshot.installation.config_present
+            ):
+                outcome = maybe_import_first_profile(snapshot.installation)
+                if outcome.ok and not outcome.cancelled:
+                    snapshot = gather_status()
         except Exception as error:
             log.exception("Detection failed")
             GLib.idle_add(self._on_refresh_failed, str(error))
@@ -318,13 +362,19 @@ class YakgWindow(Adw.ApplicationWindow):
         self._stop_connect_poll()
         self._run_action("restart")
 
-    def open_settings(self) -> None:
-        """Open the configuration dialog."""
+    def open_settings(self, *, new: bool = False) -> None:
+        """Open the profile editor for the selection, or a blank profile."""
         if self._settings is not None:
             self._settings.present()
             return
 
-        dialog = SettingsWindow(self, on_saved=self._on_settings_saved)
+        profile = None if new else self._selected_profile()
+        dialog = SettingsWindow(
+            self,
+            profile=profile,
+            on_saved=self._on_settings_saved,
+            on_deleted=self._on_profile_deleted,
+        )
         dialog.connect("close-request", self._on_settings_closed)
         self._settings = dialog
         dialog.present()
@@ -334,9 +384,18 @@ class YakgWindow(Adw.ApplicationWindow):
             self._show_toast(message)
         self.refresh()
 
+    def _on_profile_deleted(self, profile_id: str) -> None:
+        if self._selected_id == profile_id:
+            self._selected_id = None
+
     def _on_settings_closed(self, _window: SettingsWindow) -> bool:
         self._settings = None
         return False
+
+    def _selected_profile(self) -> Profile | None:
+        if self._snapshot is None or self._selected_id is None:
+            return None
+        return self._snapshot.profiles.get(self._selected_id)
 
     def _on_primary_clicked(self, _button: Gtk.Button) -> None:
         if self._snapshot is None:
@@ -352,7 +411,99 @@ class YakgWindow(Adw.ApplicationWindow):
             return
         if self._snapshot.service.active is None and self._snapshot.service.exists:
             return
-        self._run_action("start")
+        self._connect()
+
+    def _connect(self) -> None:
+        profile = self._selected_profile()
+        active_id = self._snapshot.profiles.active_id if self._snapshot is not None else None
+        if profile is None or profile.id == active_id:
+            self._run_action("start")
+            return
+        self._run_activate(then_start=True)
+
+    def _on_profile_changed(self, row: Adw.ComboRow, _pspec: GObject.ParamSpec) -> None:
+        if self._busy or self._refreshing:
+            return
+        index = int(row.get_selected())
+        if index < 0 or index >= len(self._profile_ids):
+            return
+        new_id = self._profile_ids[index]
+        if new_id == self._selected_id:
+            return
+        self._selected_id = new_id
+        if self._snapshot is not None and self._snapshot.service.active:
+            self._run_activate(then_start=False)
+
+    def _run_activate(self, *, then_start: bool) -> None:
+        if self._busy or self._refreshing:
+            return
+        profile = self._selected_profile()
+        if profile is None:
+            if then_start:
+                self._run_action("start")
+            return
+
+        self._busy = True
+        self._pending_operation = "activate"
+        self._set_controls_sensitive(False)
+        self._action_spinner.set_visible(True)
+        self._action_spinner.start()
+        thread = threading.Thread(
+            target=self._activate_worker,
+            args=(profile.id, then_start),
+            name="yakg-activate",
+            daemon=True,
+        )
+        thread.start()
+
+    def _activate_worker(self, profile_id: str, then_start: bool) -> None:
+        store = default_store()
+        try:
+            profile = get_profile(store, profile_id)
+            if profile is None:
+                outcome = ActionOutcome(ok=False, message="That profile is not valid.")
+            else:
+                password, lookup = resolve_profile_password(default_secret_store(), profile_id)
+                if not lookup.ok:
+                    outcome = lookup
+                else:
+                    outcome = activate_profile(profile, password, store=store)
+                    if outcome.ok and then_start:
+                        outcome = ServiceManager().start_service()
+        except Exception as error:
+            log.exception("Activating a profile failed")
+            outcome = ActionOutcome(
+                ok=False,
+                message="Could not apply the profile.",
+                detail=str(error),
+            )
+        GLib.idle_add(self._on_activate_done, then_start, outcome)
+
+    def _on_activate_done(self, then_start: bool, outcome: ActionOutcome) -> bool:
+        self._busy = False
+        self._pending_operation = ""
+        self._action_spinner.stop()
+        self._action_spinner.set_visible(False)
+
+        if outcome.cancelled:
+            self._action_detail = ""
+            self._awaiting_connect = False
+            self._stop_connect_poll()
+        elif outcome.ok:
+            self._action_detail = ""
+            self._awaiting_connect = True
+            self._connect_deadline = time.monotonic() + CONNECT_TIMEOUT_SECONDS
+            self._start_connect_poll()
+        else:
+            if outcome.message:
+                self._show_toast(outcome.message)
+            self._action_detail = outcome.detail
+            if then_start:
+                self._awaiting_connect = False
+                self._stop_connect_poll()
+
+        self.refresh()
+        return _DONE
 
     def _on_boot_toggled(self, row: Adw.SwitchRow, _pspec: GObject.ParamSpec) -> None:
         if self._busy or self._refreshing:
@@ -474,13 +625,16 @@ class YakgWindow(Adw.ApplicationWindow):
         self._connection_hint.set_visible(bool(hint_parts))
 
         self._update_primary_button(state, service.active)
+        self._apply_profiles(snapshot.profiles)
 
         self._client_row.set_subtitle(f"Version {installation.version_display}")
-        self._config_row.set_subtitle(
-            f"Found at {installation.config_path}"
-            if installation.config_present
-            else "Not configured yet"
-        )
+        selected = self._selected_profile()
+        if selected is not None:
+            self._config_row.set_subtitle(selected.label)
+        elif installation.config_present:
+            self._config_row.set_subtitle(f"Found at {installation.config_path}")
+        else:
+            self._config_row.set_subtitle("Not configured yet")
         self._service_row.set_subtitle(f"{service.running_label} ({service.backend.label})")
 
         self._boot_row.handler_block(self._boot_handler)
@@ -488,11 +642,16 @@ class YakgWindow(Adw.ApplicationWindow):
         self._boot_row.set_subtitle(service.boot_label)
         self._boot_row.handler_unblock(self._boot_handler)
 
-        self._banner.set_revealed(installation.needs_configuration)
-        if installation.needs_configuration:
+        if installation.needs_configuration and not snapshot.profiles.profiles:
+            self._banner.set_revealed(True)
             self._banner.set_title(
-                "The Kerio client has no configuration yet. Open Settings to create one."
+                "The Kerio client has no configuration yet. Open Settings to create a profile."
             )
+        elif installation.needs_configuration:
+            self._banner.set_revealed(True)
+            self._banner.set_title("Connect to apply a profile to the Kerio client.")
+        else:
+            self._banner.set_revealed(False)
 
         details = _technical_details(snapshot)
         if self._action_detail:
@@ -556,6 +715,30 @@ class YakgWindow(Adw.ApplicationWindow):
         self._action_button.set_sensitive(can_toggle)
         self._boot_row.set_sensitive(can_boot)
         self._restart_action.set_enabled(can_restart)
+        self._profile_row.set_sensitive(not blocked)
+        self._add_profile_button.set_sensitive(not blocked)
+
+    def _apply_profiles(self, state: ProfileState) -> None:
+        desired = self._selected_id
+        if desired is None or state.get(desired) is None:
+            desired = state.active_id
+        if desired is None and state.profiles:
+            desired = state.profiles[0].id
+        self._selected_id = desired
+
+        self._profile_row.handler_block(self._profile_handler)
+        while self._profile_model.get_n_items() > 0:
+            self._profile_model.remove(0)
+        self._profile_ids = []
+        selected_index = 0
+        for index, profile in enumerate(state.profiles):
+            self._profile_ids.append(profile.id)
+            self._profile_model.append(profile.label)
+            if profile.id == desired:
+                selected_index = index
+        if self._profile_ids:
+            self._profile_row.set_selected(selected_index)
+        self._profile_row.handler_unblock(self._profile_handler)
 
     def _show_toast(self, message: str) -> None:
         self._toast_overlay.add_toast(Adw.Toast(title=message))
@@ -575,6 +758,7 @@ def _technical_details(snapshot: SystemSnapshot) -> str:
         f"Logs:           {installation.log_dir or 'not found'}",
         f"Init system:    {service.backend.label}",
         f"Service unit:   {service.unit_name or 'not found'}",
+        f"Active profile: {_active_profile_label(snapshot)}",
         f"Connection:     {connection.label}",
         f"FSM status:     {connection.fsm or 'not seen'}",
         f"Server:         {connection.server_display or 'not seen'}",
@@ -590,3 +774,13 @@ def _technical_details(snapshot: SystemSnapshot) -> str:
         lines.append(f"\n{service.raw}")
 
     return "\n".join(lines)
+
+
+def _active_profile_label(snapshot: SystemSnapshot) -> str:
+    state = snapshot.profiles
+    if state.active_id is None:
+        return "none"
+    profile = state.get(state.active_id)
+    if profile is None:
+        return "none"
+    return profile.name

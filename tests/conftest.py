@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -80,6 +81,17 @@ class FakeRunner:
 
 #: Signature of the factory returned by the ``fake_run`` fixture.
 InstallRunner = Callable[..., FakeRunner]
+
+
+@pytest.fixture(autouse=True)
+def isolate_xdg_config(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """Keep default_store() out of the real ``~/.config/yakg``."""
+    root = tmp_path_factory.mktemp("xdg-config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root))
+    return root
 
 
 @pytest.fixture

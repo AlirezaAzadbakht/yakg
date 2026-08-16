@@ -118,8 +118,11 @@ Location: `/etc/kerio-kvc.conf`, mode `0600`, owned by root.
   `openssl s_client -connect host:port | openssl x509 -fingerprint -md5 -noout`.
 - After editing the file, the configuration must be reloaded
   (`SIGHUP`, or `/etc/init.d/kerio-kvc reload`). YAKG does this with
-  `systemctl reload kerio-kvc.service` after a successful save, and only
-  when the service is already running.
+  `systemctl reload kerio-kvc.service` after a successful helper `write`,
+  and only when the service is already running. The callers are Settings
+  (when the edited profile is already the one projected to Kerio) and
+  `activate_profile` (Connect, or switching the profile picker while
+  connected). There is still exactly one `<connection>`.
 
 ### YAKG helper
 

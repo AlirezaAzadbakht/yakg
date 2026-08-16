@@ -1,14 +1,13 @@
-"""Settings dialog for the Kerio VPN configuration.
+"""Settings dialog: edit one YAKG profile.
 
-Load, save and fingerprint detection run on worker threads. This module
-never executes a system command itself.
+Load, save, delete and fingerprint detection run on worker threads. This
+module never executes a system command itself and never calls xor_decode.
 """
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from dataclasses import replace
 
 import gi
 
@@ -17,42 +16,49 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import Adw, GLib, Gtk
 
-from yakg.backend.config import ConfigError, KerioConfig, generate_config, validate_port
-from yakg.backend.config_access import ConfigReadResult, read_config, write_config
+from yakg.backend.activate import activate_profile, resolve_profile_password
+from yakg.backend.config import ConfigError, validate_fingerprint, validate_host, validate_port
 from yakg.backend.constants import DEFAULT_PORT
 from yakg.backend.fingerprint import detect_fingerprint
+from yakg.backend.profiles import (
+    default_store,
+    delete_profile,
+    get_active_id,
+    new_profile_id,
+    save_profile,
+    validate_profile_name,
+    validate_username,
+)
+from yakg.backend.secrets import default_secret_store
 from yakg.backend.service import ServiceManager
 from yakg.models.action import ActionOutcome
+from yakg.models.profile import Profile
 from yakg.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 _DONE: bool = GLib.SOURCE_REMOVE
 
-_EMPTY = KerioConfig(
-    server="",
-    port=DEFAULT_PORT,
-    username="",
-    password_xor="",
-    fingerprint="",
-)
-
 
 class SettingsWindow(Adw.Window):
-    """Modal form for the single Kerio connection."""
+    """Modal form for one named profile."""
 
     def __init__(
         self,
         parent: Gtk.Window,
         *,
+        profile: Profile | None,
         on_saved: Callable[[str], None],
+        on_deleted: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(transient_for=parent, modal=True)
-        self.set_title("Settings")
-        self.set_default_size(480, 560)
+        self.set_title("New profile" if profile is None else "Settings")
+        self.set_default_size(480, 600)
 
         self._on_saved = on_saved
-        self._loaded: KerioConfig | None = None
+        self._on_deleted = on_deleted
+        self._profile = profile
+        self._has_password = False
         self._busy = False
 
         self._toast_overlay = Adw.ToastOverlay()
@@ -80,6 +86,12 @@ class SettingsWindow(Adw.Window):
         cancel.connect("clicked", lambda _button: self.close())
         header.pack_start(cancel)
 
+        self._delete_button = Gtk.Button(label="Delete")
+        self._delete_button.add_css_class("destructive-action")
+        self._delete_button.set_visible(self._profile is not None)
+        self._delete_button.connect("clicked", lambda _button: self._delete())
+        header.pack_end(self._delete_button)
+
         self._save_button = Gtk.Button(label="Save")
         self._save_button.add_css_class("suggested-action")
         self._save_button.connect("clicked", lambda _button: self._save())
@@ -89,13 +101,14 @@ class SettingsWindow(Adw.Window):
 
     def _build_loading_page(self) -> Gtk.Widget:
         spinner = Gtk.Spinner(spinning=True, width_request=32, height_request=32)
-        page = Adw.StatusPage(title="Loading configuration…")
+        page = Adw.StatusPage(title="Loading profile…")
         page.set_child(spinner)
         return page
 
     def _build_form(self) -> Gtk.Widget:
         group = Adw.PreferencesGroup(title="VPN connection")
 
+        self._name = Adw.EntryRow(title="Name")
         self._server = Adw.EntryRow(title="Server")
         self._port = Adw.EntryRow(title="Port")
         self._port.set_text(str(DEFAULT_PORT))
@@ -117,6 +130,7 @@ class SettingsWindow(Adw.Window):
         self._detect_row.connect("activated", lambda _row: self._detect())
 
         for row in (
+            self._name,
             self._server,
             self._port,
             self._username,
@@ -138,63 +152,66 @@ class SettingsWindow(Adw.Window):
     def _load(self) -> None:
         self._busy = True
         self._set_controls_sensitive(False)
-        thread = threading.Thread(target=self._load_worker, name="yakg-config-read", daemon=True)
+        thread = threading.Thread(target=self._load_worker, name="yakg-profile-read", daemon=True)
         thread.start()
 
     def _load_worker(self) -> None:
-        try:
-            result = read_config()
-        except Exception as error:
-            log.exception("Reading the configuration failed")
-            result = ConfigReadResult(
-                None,
-                ActionOutcome(
-                    ok=False,
-                    message="Could not read the configuration.",
-                    detail=str(error),
-                ),
-            )
-        GLib.idle_add(self._on_load_done, result)
+        has_password = False
+        if self._profile is not None:
+            try:
+                has_password = default_secret_store().contains(self._profile.id)
+            except Exception:
+                log.exception("Could not query the secret store")
+                has_password = False
+        GLib.idle_add(self._on_load_done, has_password)
 
-    def _on_load_done(self, result: ConfigReadResult) -> bool:
+    def _on_load_done(self, has_password: bool) -> bool:
         self._busy = False
-
-        if result.outcome.cancelled:
-            self.close()
-            return _DONE
-
-        if not result.outcome.ok and not result.missing:
-            self._show_toast(result.outcome.message)
-            self._apply_config(_EMPTY)
-        elif result.missing or result.config is None:
-            self._apply_config(_EMPTY)
-        else:
-            self._apply_config(result.config)
-
+        self._has_password = has_password
+        self._apply_profile(self._profile)
         self._stack.set_visible_child_name("form")
         self._set_controls_sensitive(True)
         return _DONE
 
-    def _apply_config(self, config: KerioConfig) -> None:
-        self._loaded = None if config is _EMPTY else config
-        self._server.set_text(config.server)
-        self._port.set_text(str(config.port or DEFAULT_PORT))
-        self._username.set_text(config.username)
-        self._fingerprint.set_text(config.fingerprint)
-        # Never pre-fill the password. An empty field means leave the XOR blob.
+    def _apply_profile(self, profile: Profile | None) -> None:
+        if profile is None:
+            self._name.set_text("")
+            self._server.set_text("")
+            self._port.set_text(str(DEFAULT_PORT))
+            self._username.set_text("")
+            self._fingerprint.set_text("")
+        else:
+            self._name.set_text(profile.name)
+            self._server.set_text(profile.server)
+            self._port.set_text(str(profile.port or DEFAULT_PORT))
+            self._username.set_text(profile.username)
+            self._fingerprint.set_text(profile.fingerprint)
         self._password.set_text("")
+
+    def _profile_from_form(self) -> Profile:
+        profile_id = self._profile.id if self._profile is not None else new_profile_id()
+        return Profile(
+            id=profile_id,
+            name=validate_profile_name(self._name.get_text()),
+            server=validate_host(self._server.get_text()),
+            port=validate_port(self._port.get_text()),
+            username=validate_username(self._username.get_text()),
+            fingerprint=validate_fingerprint(self._fingerprint.get_text()),
+            connection_type=(
+                self._profile.connection_type if self._profile is not None else "persistent"
+            ),
+        )
 
     def _save(self) -> None:
         if self._busy:
             return
-
-        try:
-            config = self._config_from_form()
-            xml = generate_config(config)
-        except ConfigError as error:
-            self._show_toast(str(error))
+        password = self._password.get_text()
+        if not password and not self._has_password:
+            self._show_toast("A password is required.")
             return
-        except ValueError as error:
+        try:
+            profile = self._profile_from_form()
+        except ConfigError as error:
             self._show_toast(str(error))
             return
 
@@ -202,34 +219,20 @@ class SettingsWindow(Adw.Window):
         self._set_controls_sensitive(False)
         thread = threading.Thread(
             target=self._save_worker,
-            args=(xml,),
-            name="yakg-config-write",
+            args=(profile, password),
+            name="yakg-profile-write",
             daemon=True,
         )
         thread.start()
 
-    def _config_from_form(self) -> KerioConfig:
-        port = validate_port(self._port.get_text())
-        base = self._loaded if self._loaded is not None else _EMPTY
-        return replace(
-            base,
-            server=self._server.get_text().strip(),
-            port=port,
-            username=self._username.get_text().strip(),
-            password_plain=self._password.get_text(),
-            fingerprint=self._fingerprint.get_text().strip(),
-        )
-
-    def _save_worker(self, xml: str) -> None:
+    def _save_worker(self, profile: Profile, password: str) -> None:
         try:
-            outcome = write_config(xml)
-            if outcome.ok:
-                outcome = _reload_if_running(outcome)
+            outcome = _save_profile(profile, password)
         except Exception as error:
-            log.exception("Saving the configuration failed")
+            log.exception("Saving the profile failed")
             outcome = ActionOutcome(
                 ok=False,
-                message="Could not save the configuration.",
+                message="Could not save the profile.",
                 detail=str(error),
             )
         GLib.idle_add(self._on_save_done, outcome)
@@ -245,6 +248,45 @@ class SettingsWindow(Adw.Window):
             return _DONE
 
         self.close()
+        self._on_saved(outcome.message)
+        return _DONE
+
+    def _delete(self) -> None:
+        if self._busy or self._profile is None:
+            return
+        self._busy = True
+        self._set_controls_sensitive(False)
+        thread = threading.Thread(
+            target=self._delete_worker,
+            args=(self._profile.id,),
+            name="yakg-profile-delete",
+            daemon=True,
+        )
+        thread.start()
+
+    def _delete_worker(self, profile_id: str) -> None:
+        try:
+            delete_profile(default_store(), profile_id)
+            default_secret_store().delete(profile_id)
+            outcome = ActionOutcome(ok=True, message="Deleted the profile.")
+        except Exception as error:
+            log.exception("Deleting the profile failed")
+            outcome = ActionOutcome(
+                ok=False,
+                message="Could not delete the profile.",
+                detail=str(error),
+            )
+        GLib.idle_add(self._on_delete_done, profile_id, outcome)
+
+    def _on_delete_done(self, profile_id: str, outcome: ActionOutcome) -> bool:
+        self._busy = False
+        self._set_controls_sensitive(True)
+        if not outcome.ok:
+            self._show_toast(outcome.message)
+            return _DONE
+        self.close()
+        if self._on_deleted is not None:
+            self._on_deleted(profile_id)
         self._on_saved(outcome.message)
         return _DONE
 
@@ -290,8 +332,16 @@ class SettingsWindow(Adw.Window):
     def _set_controls_sensitive(self, sensitive: bool) -> None:
         enabled = sensitive and not self._busy
         self._save_button.set_sensitive(enabled)
+        self._delete_button.set_sensitive(enabled)
         self._detect_row.set_sensitive(enabled)
-        for widget in (self._server, self._port, self._username, self._fingerprint, self._password):
+        for widget in (
+            self._name,
+            self._server,
+            self._port,
+            self._username,
+            self._fingerprint,
+            self._password,
+        ):
             widget.set_sensitive(enabled)
 
     def _show_toast(self, message: str) -> None:
@@ -299,24 +349,22 @@ class SettingsWindow(Adw.Window):
             self._toast_overlay.add_toast(Adw.Toast(title=message))
 
 
-def _reload_if_running(saved: ActionOutcome) -> ActionOutcome:
-    """Reload the Kerio service after a successful save, if it is up."""
-    manager = ServiceManager()
-    status = manager.get_service_status()
-    if status.active is not True:
-        return saved
+def _save_profile(profile: Profile, password: str) -> ActionOutcome:
+    store = default_store()
+    secrets = default_secret_store()
+    saved = save_profile(store, profile)
+    if password:
+        stored = secrets.set(saved.id, password)
+        if not stored.ok:
+            return stored
 
-    reloaded = manager.reload_service()
-    if reloaded.ok:
-        return saved
-    if reloaded.cancelled:
-        return ActionOutcome(
-            ok=True,
-            message="Saved the configuration. The service was not reloaded.",
-            detail=reloaded.detail,
-        )
-    return ActionOutcome(
-        ok=True,
-        message="Saved the configuration, but could not reload the service.",
-        detail=reloaded.detail,
-    )
+    active_id = get_active_id(store)
+    running = ServiceManager().get_service_status().active is True
+    if saved.id == active_id and running:
+        secret = password
+        if not secret:
+            secret, lookup = resolve_profile_password(secrets, saved.id)
+            if not lookup.ok:
+                return lookup
+        return activate_profile(saved, secret, store=store)
+    return ActionOutcome(ok=True, message="Saved the profile.")

@@ -14,9 +14,9 @@ Kerio code. It drives the client you already have installed.
 
 ## Status
 
-Early development. **Milestones 1–4 are complete**: YAKG can detect the client, control the
-service, connect and disconnect, report whether the tunnel is actually up, and
-view or save the Kerio configuration.
+Early development. **Milestones 1–5 are complete**: YAKG can detect the client, control the
+service, connect and disconnect, report whether the tunnel is actually up, and keep
+named profiles whose passwords live in the desktop secret store.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ view or save the Kerio configuration.
 | 2 | Service control (start, stop, restart, enable, disable) | Done |
 | 3 | Connection control and real connection state | Done |
 | 4 | Configuration viewing, validation and safe saving | Done |
-| 5 | Profiles | Not started |
+| 5 | Profiles | Done |
 | 6 | Tray, notifications, autostart | Not started |
 
 ## Screenshots
@@ -53,7 +53,7 @@ and WSL images that do not boot with systemd.
 YAKG is not packaged yet. Install the GTK bindings from Ubuntu, then YAKG from source:
 
 ```bash
-sudo apt install python3-pip python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1
+sudo apt install python3-pip python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1
 git clone https://github.com/alirezaazadbakht/yakg.git
 cd yakg
 pip install --user .
@@ -65,8 +65,8 @@ The GTK bindings deliberately come from apt rather than pip: PyGObject built fro
 match the system GTK, and installing it from the distribution avoids that whole problem.
 
 `install-helper.sh` installs `/usr/libexec/yakg-helper` and the polkit action that lets it
-read and write `/etc/kerio-kvc.conf`. **Save in Settings does not work until this has been
-run once.** Connect and Disconnect do not need it.
+read and write `/etc/kerio-kvc.conf`. **Applying a profile (Connect, or switching while
+connected) needs the helper.** Disconnect does not.
 
 ## Usage
 
@@ -80,11 +80,14 @@ The primary button is **Connect**, **Cancel**, or **Disconnect**:
   so the client can keep retrying.
 - Disconnect (and Cancel) stop the service. There is no separate Kerio connect command.
 - *Start at boot* is a switch in the System group. Restart is in the header menu.
-- **Settings** (header menu, Ctrl+comma, or the *Client configuration* row) opens a form
-  for server, port, username, password and fingerprint. The password field is never
-  pre-filled; leave it blank to keep the stored value. **Detect fingerprint** asks the
-  server the same way the vendor wizard does and fills the field; it does not save.
-  Save writes through the helper, then reloads the service if it is running.
+- The **Profile** picker chooses which named connection Connect will use. Connect writes
+  that profile into the Kerio client (if it is not already the active one) and then starts
+  the service. Switching the picker while connected writes the new profile and reloads.
+- **Settings** (header menu, Ctrl+comma, the configuration row, or Add on the picker)
+  edits the selected profile: name, server, port, username, password and fingerprint.
+  The password is stored in the desktop secret store, not in the profile file. Leave the
+  field blank to keep the saved password. Save does not write `/etc` unless you are
+  editing the profile that is already applied and the service is running.
 
 Each privileged action asks for administrator authentication through the normal GNOME
 password dialog; dismissing the dialog cancels the action and is not treated as an error.
@@ -113,6 +116,9 @@ Service
   Running:        Stopped
   Start at boot:  Disabled
 
+Profile
+  Active:         none
+
 Connection
   State:          Disconnected
   Server:         not seen
@@ -123,12 +129,15 @@ Connection
 
 ## Profile management
 
-Not implemented yet; it is Milestone 5.
+The Kerio client holds exactly one connection. YAKG keeps any number of named profiles
+under `~/.config/yakg/profiles/` and writes exactly one of them into `/etc/kerio-kvc.conf`
+when you Connect, or when you switch the picker while already connected.
 
-The Kerio client supports exactly one VPN connection at a time, so YAKG will keep its own
-profiles under `~/.config/yakg/profiles/` and translate the active one into the single
-configuration the client expects. Activating a profile will always back up the existing
-configuration first, and restore it if the write fails.
+Non-secret fields (name, server, port, username, fingerprint) live in those JSON files.
+The password lives in the desktop secret store (GNOME Keyring via libsecret), never in
+the profile file. The helper still writes the password to Kerio only as the vendor
+`XOR:` blob, and only at activate time. A write still copies the live file to
+`/var/backups/yakg/` first and restores it if verification fails.
 
 ## Security model
 
@@ -174,18 +183,21 @@ transform, so anyone able to read the file can trivially recover the password. T
 root ownership is the only thing actually protecting it.
 
 YAKG does not change this — it is how the Kerio client works, and YAKG must write a
-configuration the client can read. The password is still stored only as that XOR blob in
-the Kerio file. YAKG does not keep a copy of it, and does not use libsecret yet (that is
-Milestone 5). The Settings password field is write-only: leave it blank to keep the
-existing blob, and YAKG will not decode the stored value just to show it.
+configuration the client can read. YAKG profile files are not a credential store: they
+never contain `password`, `password_xor`, or an `XOR:` blob. The password lives in the
+session keyring and is written to Kerio only as that XOR form when a profile is applied.
+The Settings password field is write-only: leave it blank to keep the keyring entry, and
+YAKG will not decode a stored value just to show it.
 
-YAKG never reads that file during detection. Presence is established with a stat. The
-helper is what opens it, and only when you open Settings or press Save.
+YAKG never reads `/etc/kerio-kvc.conf` during detection. Presence is established with a
+stat. The helper is what opens it: on first-run import (to seed a profile from an
+existing install), when Connect or a live picker switch applies a profile, and when you
+save the profile that is already applied while the service is running.
 
 ## Development
 
 ```bash
-sudo apt install python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+sudo apt install python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1
 git clone https://github.com/alirezaazadbakht/yakg.git
 cd yakg
 python3 -m venv --system-site-packages .venv   # for the system GTK bindings
@@ -220,6 +232,10 @@ src/yakg/
 │   ├── config.py      parse, validate, XOR, atomic write
 │   ├── config_access.py  pkexec the helper; XML on stdin
 │   ├── fingerprint.py openssl s_client / x509, argv only
+│   ├── paths.py       XDG config home for YAKG's own files
+│   ├── profiles.py    named profiles on disk; never a password
+│   ├── secrets.py     libsecret / in-memory secret store
+│   ├── activate.py    project a profile through the helper
 │   ├── service.py     systemd and SysV backends
 │   └── status.py      assembles one snapshot for the UI
 ├── models/            frozen dataclasses shared by both sides
@@ -264,8 +280,8 @@ retrying. Open *Technical details* for the last VpnFSM line. Cancel stops the se
 That is still Connecting, not Disconnected. The last error, when known, is shown under the
 status.
 
-**Settings says the helper is needed** — run `sudo ./packaging/install-helper.sh` from the
-source tree. Connect and Disconnect work without it; Save does not.
+**Settings or Connect says the helper is needed** — run `sudo ./packaging/install-helper.sh`
+from the source tree. Disconnect works without it. Applying a profile needs the helper.
 
 **The window will not start** — run `yakg` from a terminal. Missing GTK bindings produce an
 explanation and the apt command that fixes it.
@@ -277,7 +293,7 @@ explanation and the apt command that fixes it.
 - A 45-second connect timeout does not stop the service; the client keeps retrying.
 - The SysV control path (`pkexec` on the init script and `update-rc.d`) is unverified on a
   live SysV host.
-- No profiles, no libsecret, no tray icon, no notifications.
+- No tray icon, no notifications, no autostart (Milestone 6).
 - Verified against exactly one Kerio version, on Ubuntu 24.04.
 - No packaging: source installation only.
 

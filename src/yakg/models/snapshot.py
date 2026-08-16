@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from yakg.models.connection import ConnectionInfo
 from yakg.models.installation import Installation
+from yakg.models.profile import ProfileState
 from yakg.models.service import ServiceState
 
 
@@ -21,6 +22,7 @@ class SystemSnapshot:
     installation: Installation
     service: ServiceState
     connection: ConnectionInfo = field(default_factory=ConnectionInfo)
+    profiles: ProfileState = field(default_factory=ProfileState)
 
     @property
     def usable(self) -> bool:

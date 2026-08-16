@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from yakg.backend.connection import read_connection_logs
 from yakg.backend.detect import detect_client
+from yakg.backend.profiles import ProfileStore, default_store, load_profile_state
 from yakg.backend.service import ServiceManager
 from yakg.models.connection import ConnectionInfo, ConnectionState
 from yakg.models.installation import Installation
@@ -81,26 +82,34 @@ def infer_connection_state(
     )
 
 
-def gather_status(manager: ServiceManager | None = None) -> SystemSnapshot:
-    """Detect the client, the service and the connection.
+def gather_status(
+    manager: ServiceManager | None = None,
+    *,
+    store: ProfileStore | None = None,
+) -> SystemSnapshot:
+    """Detect the client, the service, the connection and local profiles.
 
     Blocking. Callers on the GTK main thread must run this on a worker thread.
     Never opens the Kerio configuration file. Presence is still a stat.
+    Profiles come from the user config directory only.
     """
     installation = detect_client()
     service = (manager if manager is not None else ServiceManager()).get_service_status()
     parsed = read_connection_logs(installation.log_dir)
     connection = infer_connection_state(installation, service, parsed)
+    profiles = load_profile_state(store if store is not None else default_store())
 
     log.info(
-        "Connection: state=%s fsm=%s server=%s",
+        "Connection: state=%s fsm=%s server=%s profiles=%s",
         connection.state.value,
         connection.fsm or "-",
         connection.server or "-",
+        len(profiles.profiles),
     )
 
     return SystemSnapshot(
         installation=installation,
         service=service,
         connection=connection,
+        profiles=profiles,
     )

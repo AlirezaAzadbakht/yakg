@@ -20,7 +20,7 @@ from yakg.utils.logging import get_logger
 log = get_logger(__name__)
 
 MISSING_HELPER_MESSAGE = (
-    "Configuration editing needs the YAKG helper. "
+    "Applying a profile needs the YAKG helper. "
     "Install it with packaging/install-helper.sh (see the README)."
 )
 

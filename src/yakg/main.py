@@ -23,7 +23,7 @@ _MISSING_GTK = (
     "to be installed.\n\n"
     "On Ubuntu:\n"
     "    sudo apt install python3-gi python3-gi-cairo "
-    "gir1.2-gtk-4.0 gir1.2-adw-1\n"
+    "gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1\n"
 )
 
 
@@ -75,6 +75,9 @@ def format_report(snapshot: SystemSnapshot) -> str:
         f"  Running:        {service.running_label}",
         f"  Start at boot:  {service.boot_label}",
         "",
+        "Profile",
+        f"  Active:         {_active_profile_line(snapshot)}",
+        "",
         "Connection",
         f"  State:          {snapshot.connection.label}",
         f"  Server:         {snapshot.connection.server_display or 'not seen'}",
@@ -91,6 +94,18 @@ def format_report(snapshot: SystemSnapshot) -> str:
         lines.extend(f"  {note}" for note in notes)
 
     return "\n".join(lines)
+
+
+def _active_profile_line(snapshot: SystemSnapshot) -> str:
+    state = snapshot.profiles
+    if state.active_id is None:
+        return "none"
+    profile = state.get(state.active_id)
+    if profile is None:
+        return "none"
+    if profile.server:
+        return f"{profile.name} ({profile.server})"
+    return profile.name
 
 
 def main(argv: Sequence[str] | None = None) -> int:
