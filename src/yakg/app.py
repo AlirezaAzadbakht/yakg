@@ -5,15 +5,17 @@ from __future__ import annotations
 import gi
 
 gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gdk, Gio, Gtk
 
 from yakg import APP_ID, APP_NAME, __version__
 from yakg.backend.autostart import ensure_application_desktop
 from yakg.backend.notify import NotifyEvent, next_notification
 from yakg.backend.preferences import load_preferences
 from yakg.models.snapshot import SystemSnapshot
+from yakg.resources import icon_theme_root
 from yakg.ui.tray import StatusNotifierTray
 from yakg.ui.window import YakgWindow
 from yakg.utils.logging import get_logger
@@ -50,6 +52,7 @@ class YakgApplication(Adw.Application):
         self._add_action("quit", self._on_quit, accels=["<Primary>q"])
 
         ensure_application_desktop()
+        self._register_icon()
         if not self._held:
             self.hold()
             self._held = True
@@ -135,6 +138,13 @@ class YakgApplication(Adw.Application):
         notification.set_default_action("app.show")
         self.send_notification(_NOTIFICATION_ID, notification)
 
+    def _register_icon(self) -> None:
+        display = Gdk.Display.get_default()
+        if display is not None:
+            theme = Gtk.IconTheme.get_for_display(display)
+            theme.add_search_path(str(icon_theme_root()))
+        Gtk.Window.set_default_icon_name(APP_ID)
+
     def _add_action(
         self,
         name: str,
@@ -171,7 +181,7 @@ class YakgApplication(Adw.Application):
         about = Adw.AboutWindow(
             transient_for=self._window,
             application_name=APP_NAME,
-            application_icon="network-vpn-symbolic",
+            application_icon=APP_ID,
             version=__version__,
             developer_name="The YAKG contributors",
             license_type=Gtk.License.MIT_X11,

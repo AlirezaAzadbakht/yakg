@@ -39,15 +39,33 @@ def autostart_dir(
     return base / ".config" / "autostart"
 
 
+def xdg_data_home(
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Return ``XDG_DATA_HOME`` (default ``~/.local/share``)."""
+    env = os.environ if environ is None else environ
+    xdg = env.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg)
+    base = Path.home() if home is None else home
+    return base / ".local" / "share"
+
+
 def data_home(
     *,
     environ: Mapping[str, str] | None = None,
     home: Path | None = None,
 ) -> Path:
     """Return the applications directory under ``XDG_DATA_HOME``."""
-    env = os.environ if environ is None else environ
-    xdg = env.get("XDG_DATA_HOME")
-    if xdg:
-        return Path(xdg) / "applications"
-    base = Path.home() if home is None else home
-    return base / ".local" / "share" / "applications"
+    return xdg_data_home(environ=environ, home=home) / "applications"
+
+
+def icons_home(
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Return the scalable apps icon directory under ``XDG_DATA_HOME``."""
+    return xdg_data_home(environ=environ, home=home) / "icons" / "hicolor" / "scalable" / "apps"

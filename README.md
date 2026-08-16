@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/yakg/resources/icons/hicolor/scalable/apps/io.github.yakg.Yakg.svg" width="128" height="128" alt="YAKG">
+</p>
+
 # YAKG — Yet Another Kerio GUI
 
 A small, native GNOME desktop frontend for the **Kerio Control VPN Client** on Linux.
@@ -236,6 +240,7 @@ src/yakg/
 ├── main.py            entry point, --detect, --hidden and --version
 ├── app.py             GTK application, actions, accelerators, hold
 ├── helper.py          privileged entry (read/write/restore); no GTK
+├── resources/         application icon (hicolor)
 ├── ui/                widgets and the SNI tray; never runs a system command
 ├── backend/
 │   ├── process.py     the only place a subprocess is spawned

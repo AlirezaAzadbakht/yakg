@@ -15,6 +15,7 @@ from yakg.backend.autostart import (
     disable_autostart,
     enable_autostart,
     ensure_application_desktop,
+    ensure_application_icon,
 )
 from yakg.backend.notify import (
     CONNECTED_TITLE,
@@ -157,6 +158,15 @@ class TestAutostart:
         assert (apps / DESKTOP_FILENAME).is_file()
         assert "--hidden" not in applications_desktop_text()
         assert "--hidden" in autostart_desktop_text()
+        assert "Icon=io.github.yakg.Yakg" in applications_desktop_text()
+        assert "Icon=io.github.yakg.Yakg" in autostart_desktop_text()
+
+    def test_ensure_application_icon_copies_the_svg(self, tmp_path: Path) -> None:
+        from yakg.resources import ICON_FILENAME, icon_path
+
+        destination = ensure_application_icon(tmp_path / "apps")
+        assert destination.name == ICON_FILENAME
+        assert destination.read_bytes() == icon_path().read_bytes()
 
     def test_ensure_application_desktop_does_not_overwrite(self, tmp_path: Path) -> None:
         folder = tmp_path / "applications"
