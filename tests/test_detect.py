@@ -217,4 +217,7 @@ class TestDetectClient:
         # A guard against the verified paths drifting out of the constants.
         assert Path("/usr/sbin/kvpncsvc") in constants.EXECUTABLE_CANDIDATES
         assert Path("/etc/kerio-kvc.conf") in constants.CONFIG_CANDIDATES
+        assert Path("/etc/kerio-kvc.conf") == constants.CONFIG_PATH
+        assert Path("/usr/libexec/yakg-helper") == constants.HELPER_PATH
+        assert Path("/var/backups/yakg") == constants.CONFIG_BACKUP_DIR
         assert constants.SYSTEMD_UNIT == "kerio-kvc.service"

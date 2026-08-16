@@ -32,6 +32,7 @@ class YakgApplication(Adw.Application):
         Adw.Application.do_startup(self)
 
         self._add_action("refresh", self._on_refresh, accels=["<Primary>r"])
+        self._add_action("settings", self._on_settings, accels=["<Primary>comma"])
         self._add_action("about", self._on_about)
         self._add_action("quit", self._on_quit, accels=["<Primary>q"])
 
@@ -56,6 +57,10 @@ class YakgApplication(Adw.Application):
     def _on_refresh(self, _action: Gio.SimpleAction, _parameter: None) -> None:
         if self._window is not None:
             self._window.refresh()
+
+    def _on_settings(self, _action: Gio.SimpleAction, _parameter: None) -> None:
+        if self._window is not None:
+            self._window.open_settings()
 
     def _on_about(self, _action: Gio.SimpleAction, _parameter: None) -> None:
         about = Adw.AboutWindow(

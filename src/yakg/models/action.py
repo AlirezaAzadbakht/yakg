@@ -1,4 +1,4 @@
-"""The result of a privileged service action.
+"""The result of a privileged action.
 
 Control operations return this instead of raising, so a cancelled password
 prompt can be distinguished from a real failure. The user interface treats
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ActionOutcome:
-    """What happened when YAKG asked the init system to change something."""
+    """What happened when YAKG asked for a privileged change."""
 
     ok: bool
 

@@ -26,6 +26,7 @@ from yakg.backend.status import gather_status
 from yakg.models.action import ActionOutcome
 from yakg.models.connection import ConnectionState
 from yakg.models.snapshot import SystemSnapshot
+from yakg.ui.settings import SettingsWindow
 from yakg.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -80,6 +81,7 @@ class YakgWindow(Adw.ApplicationWindow):
         self._pending_operation = ""
         self._snapshot: SystemSnapshot | None = None
         self._action_detail = ""
+        self._settings: SettingsWindow | None = None
 
         self._add_window_actions()
 
@@ -125,6 +127,7 @@ class YakgWindow(Adw.ApplicationWindow):
         header.pack_start(self._refresh_button)
 
         menu = Gio.Menu()
+        menu.append("Settings", "app.settings")
         menu.append("Restart Service", "win.restart")
         menu.append("About YAKG", "app.about")
         menu.append("Quit", "app.quit")
@@ -198,7 +201,13 @@ class YakgWindow(Adw.ApplicationWindow):
 
         details = Adw.PreferencesGroup(title="System")
         self._client_row = Adw.ActionRow(title="Kerio VPN Client", subtitle="Unknown")
-        self._config_row = Adw.ActionRow(title="Client configuration", subtitle="Unknown")
+        self._config_row = Adw.ActionRow(
+            title="Client configuration",
+            subtitle="Unknown",
+            activatable=True,
+        )
+        self._config_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self._config_row.connect("activated", lambda _row: self.open_settings())
         self._service_row = Adw.ActionRow(title="Service", subtitle="Unknown")
         self._boot_row = Adw.SwitchRow(title="Start at boot")
         self._boot_handler = self._boot_row.connect("notify::active", self._on_boot_toggled)
@@ -308,6 +317,26 @@ class YakgWindow(Adw.ApplicationWindow):
         self._awaiting_connect = False
         self._stop_connect_poll()
         self._run_action("restart")
+
+    def open_settings(self) -> None:
+        """Open the configuration dialog."""
+        if self._settings is not None:
+            self._settings.present()
+            return
+
+        dialog = SettingsWindow(self, on_saved=self._on_settings_saved)
+        dialog.connect("close-request", self._on_settings_closed)
+        self._settings = dialog
+        dialog.present()
+
+    def _on_settings_saved(self, message: str) -> None:
+        if message:
+            self._show_toast(message)
+        self.refresh()
+
+    def _on_settings_closed(self, _window: SettingsWindow) -> bool:
+        self._settings = None
+        return False
 
     def _on_primary_clicked(self, _button: Gtk.Button) -> None:
         if self._snapshot is None:
@@ -462,8 +491,7 @@ class YakgWindow(Adw.ApplicationWindow):
         self._banner.set_revealed(installation.needs_configuration)
         if installation.needs_configuration:
             self._banner.set_title(
-                "The Kerio client has no configuration yet. Run "
-                "'sudo dpkg-reconfigure kerio-control-vpnclient' to set one up."
+                "The Kerio client has no configuration yet. Open Settings to create one."
             )
 
         details = _technical_details(snapshot)

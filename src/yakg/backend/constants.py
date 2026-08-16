@@ -29,7 +29,19 @@ EXECUTABLE_CANDIDATES: Final[tuple[Path, ...]] = (
 
 #: Written by the package's configuration wizard, not shipped by the package.
 #: Mode 0600, owned by root, and contains a recoverable password.
-CONFIG_CANDIDATES: Final[tuple[Path, ...]] = (Path("/etc/kerio-kvc.conf"),)
+CONFIG_PATH: Final = Path("/etc/kerio-kvc.conf")
+CONFIG_CANDIDATES: Final[tuple[Path, ...]] = (CONFIG_PATH,)
+
+#: Privileged helper that is the only process YAKG uses to read or write the
+#: Kerio configuration. Installed by ``packaging/install-helper.sh``.
+HELPER_PATH: Final = Path("/usr/libexec/yakg-helper")
+
+#: Root-owned backups of the Kerio configuration, written by the helper.
+CONFIG_BACKUP_DIR: Final = Path("/var/backups/yakg")
+
+#: polkit action shipped with the helper. Service control still uses systemd's
+#: own actions; this one is only for the configuration file.
+POLKIT_CONFIG_ACTION: Final = "io.github.yakg.Yakg.manage-config"
 
 #: World-readable, so YAKG can show logs without elevated privileges.
 LOG_DIR_CANDIDATES: Final[tuple[Path, ...]] = (Path("/var/log/kerio-kvc"),)

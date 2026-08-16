@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 yakg = "yakg.main:main"
+yakg-helper = "yakg.helper:main"
 
 [project.urls]
 Homepage = "https://github.com/alirezaazadbakht/yakg"
@@ -68,7 +69,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # assert is the point of a test
+"tests/*" = ["S101", "S105", "S106"]  # assert, and fixture passwords, are the point
 
 # PyGObject requires gi.require_version() to run before gi.repository is
 # imported, so imports in these modules genuinely cannot all sit at the top.

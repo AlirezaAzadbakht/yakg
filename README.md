@@ -14,15 +14,16 @@ Kerio code. It drives the client you already have installed.
 
 ## Status
 
-Early development. **Milestones 1–3 are complete**: YAKG can detect the client, control the
-service, connect and disconnect, and report whether the tunnel is actually up.
+Early development. **Milestones 1–4 are complete**: YAKG can detect the client, control the
+service, connect and disconnect, report whether the tunnel is actually up, and
+view or save the Kerio configuration.
 
 | Milestone | Scope | State |
 | --- | --- | --- |
 | 1 | Detection and status | Done |
 | 2 | Service control (start, stop, restart, enable, disable) | Done |
 | 3 | Connection control and real connection state | Done |
-| 4 | Configuration viewing, validation and safe saving | Not started |
+| 4 | Configuration viewing, validation and safe saving | Done |
 | 5 | Profiles | Not started |
 | 6 | Tray, notifications, autostart | Not started |
 
@@ -56,11 +57,16 @@ sudo apt install python3-pip python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-a
 git clone https://github.com/alirezaazadbakht/yakg.git
 cd yakg
 pip install --user .
+sudo ./packaging/install-helper.sh
 yakg
 ```
 
 The GTK bindings deliberately come from apt rather than pip: PyGObject built from PyPI has to
 match the system GTK, and installing it from the distribution avoids that whole problem.
+
+`install-helper.sh` installs `/usr/libexec/yakg-helper` and the polkit action that lets it
+read and write `/etc/kerio-kvc.conf`. **Save in Settings does not work until this has been
+run once.** Connect and Disconnect do not need it.
 
 ## Usage
 
@@ -74,6 +80,11 @@ The primary button is **Connect**, **Cancel**, or **Disconnect**:
   so the client can keep retrying.
 - Disconnect (and Cancel) stop the service. There is no separate Kerio connect command.
 - *Start at boot* is a switch in the System group. Restart is in the header menu.
+- **Settings** (header menu, Ctrl+comma, or the *Client configuration* row) opens a form
+  for server, port, username, password and fingerprint. The password field is never
+  pre-filled; leave it blank to keep the stored value. **Detect fingerprint** asks the
+  server the same way the vendor wizard does and fills the field; it does not save.
+  Save writes through the helper, then reloads the service if it is running.
 
 Each privileged action asks for administrator authentication through the normal GNOME
 password dialog; dismissing the dialog cancels the action and is not treated as an error.
@@ -124,15 +135,25 @@ configuration first, and restore it if the write fails.
 Three things drive YAKG's design here.
 
 **The GUI does not run as root.** There is no `sudo yakg`. The interface runs as your user.
-YAKG ships no privileged helper and no polkit policy of its own. Starting or stopping the
-service is a plain `systemctl` call; systemd asks polkit, and the session agent prompts. The
-actions involved are the ones systemd already ships:
 
-- `org.freedesktop.systemd1.manage-units` for start, stop and restart
+Starting or stopping the service is a plain `systemctl` call; systemd asks polkit, and the
+session agent prompts. The actions involved are the ones systemd already ships:
+
+- `org.freedesktop.systemd1.manage-units` for start, stop, restart and reload
 - `org.freedesktop.systemd1.manage-unit-files` for enable and disable
 
 On a host that is not running systemd, YAKG falls back to `pkexec` on the Kerio init script
 and on `update-rc.d`. That path has not been verified on a live SysV system.
+
+Reading and writing `/etc/kerio-kvc.conf` is a different privilege. There is no existing
+polkit action for that file, so YAKG ships one helper and one action:
+
+- `yakg-helper` at `/usr/libexec/yakg-helper`, verbs `read`, `write` and `restore` only
+- `io.github.yakg.Yakg.manage-config` (`auth_admin_keep` for an active session)
+
+The helper is the only process that opens the file. Configuration text and any new password
+travel on stdin, never in argv. A write validates, copies the existing file to
+`/var/backups/yakg/`, replaces it atomically, and restores the backup if verification fails.
 
 **Commands are never built as shell strings.** Every external command goes through one runner
 that takes an argument vector and never invokes a shell, so no value YAKG handles can be
@@ -153,12 +174,13 @@ transform, so anyone able to read the file can trivially recover the password. T
 root ownership is the only thing actually protecting it.
 
 YAKG does not change this — it is how the Kerio client works, and YAKG must write a
-configuration the client can read. What YAKG will do, from Milestone 4 onward, is keep its own
-copy of your credentials in the desktop secret store (GNOME Keyring via the Secret Service API)
-rather than in its own configuration files, and treat `/etc/kerio-kvc.conf` as the
-credential-bearing file it is.
+configuration the client can read. The password is still stored only as that XOR blob in
+the Kerio file. YAKG does not keep a copy of it, and does not use libsecret yet (that is
+Milestone 5). The Settings password field is write-only: leave it blank to keep the
+existing blob, and YAKG will not decode the stored value just to show it.
 
-YAKG never reads that file during detection. Presence is established with a stat.
+YAKG never reads that file during detection. Presence is established with a stat. The
+helper is what opens it, and only when you open Settings or press Save.
 
 ## Development
 
@@ -177,9 +199,9 @@ mypy          # types
 ```
 
 The test suite needs no root, no VPN connection and no desktop session. Every system
-interaction is faked, so the tests never touch the machine they run on. CI deliberately runs
-without GTK installed, which enforces the rule that the backend stays importable without a
-desktop stack.
+interaction is faked, so the tests never touch the machine they run on, including
+`/etc/kerio-kvc.conf`. CI deliberately runs without GTK installed, which enforces the rule
+that the backend stays importable without a desktop stack.
 
 ### Architecture
 
@@ -187,6 +209,7 @@ desktop stack.
 src/yakg/
 ├── main.py            entry point, --detect and --version
 ├── app.py             GTK application, actions, accelerators
+├── helper.py          privileged entry (read/write/restore); no GTK
 ├── ui/                widgets; never runs a system command
 ├── backend/
 │   ├── process.py     the only place a subprocess is spawned
@@ -194,6 +217,9 @@ src/yakg/
 │   ├── detect.py      is the client installed?
 │   ├── classify.py    maps systemctl/pkexec errors to ActionOutcome
 │   ├── connection.py  parses VpnFSM status from debug.log
+│   ├── config.py      parse, validate, XOR, atomic write
+│   ├── config_access.py  pkexec the helper; XML on stdin
+│   ├── fingerprint.py openssl s_client / x509, argv only
 │   ├── service.py     systemd and SysV backends
 │   └── status.py      assembles one snapshot for the UI
 ├── models/            frozen dataclasses shared by both sides
@@ -238,6 +264,9 @@ retrying. Open *Technical details* for the last VpnFSM line. Cancel stops the se
 That is still Connecting, not Disconnected. The last error, when known, is shown under the
 status.
 
+**Settings says the helper is needed** — run `sudo ./packaging/install-helper.sh` from the
+source tree. Connect and Disconnect work without it; Save does not.
+
 **The window will not start** — run `yakg` from a terminal. Missing GTK bindings produce an
 explanation and the apt command that fixes it.
 
@@ -248,7 +277,7 @@ explanation and the apt command that fixes it.
 - A 45-second connect timeout does not stop the service; the client keeps retrying.
 - The SysV control path (`pkexec` on the init script and `update-rc.d`) is unverified on a
   live SysV host.
-- No configuration editing, no profiles, no tray icon, no notifications.
+- No profiles, no libsecret, no tray icon, no notifications.
 - Verified against exactly one Kerio version, on Ubuntu 24.04.
 - No packaging: source installation only.
 

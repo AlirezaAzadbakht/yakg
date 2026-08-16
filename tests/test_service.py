@@ -327,7 +327,14 @@ class TestServiceManager:
 
     @pytest.mark.parametrize(
         "operation",
-        ["start_service", "stop_service", "restart_service", "enable_service", "disable_service"],
+        [
+            "start_service",
+            "stop_service",
+            "restart_service",
+            "reload_service",
+            "enable_service",
+            "disable_service",
+        ],
     )
     def test_null_backend_fails_with_an_explanation(self, operation: str) -> None:
         manager = ServiceManager(NullBackend())
@@ -355,6 +362,7 @@ class TestSystemdControl:
             ("start", "start", "Started the Kerio VPN service."),
             ("stop", "stop", "Stopped the Kerio VPN service."),
             ("restart", "restart", "Restarted the Kerio VPN service."),
+            ("reload", "reload", "Reloaded the Kerio VPN service."),
             ("enable", "enable", "The Kerio VPN service will start at boot."),
             ("disable", "disable", "The Kerio VPN service will not start at boot."),
         ],
@@ -433,7 +441,7 @@ class TestSysVControl:
         path.touch()
         return path
 
-    @pytest.mark.parametrize("verb", ["start", "stop", "restart"])
+    @pytest.mark.parametrize("verb", ["start", "stop", "restart", "reload"])
     def test_uses_pkexec_on_the_init_script(
         self, fake_run: InstallRunner, script: Path, verb: str
     ) -> None:

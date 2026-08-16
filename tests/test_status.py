@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from conftest import InstallRunner, result
+from yakg.backend import status as status_module
 from yakg.backend.service import ServiceManager, SystemdBackend
 from yakg.backend.status import gather_status, infer_connection_state
 from yakg.main import format_report
@@ -74,6 +75,13 @@ class TestGatherStatus:
         assert snapshot.service.active is False
         assert snapshot.connection.state is ConnectionState.DISCONNECTED
         assert snapshot.usable
+
+    def test_does_not_read_the_kerio_configuration_file(self) -> None:
+        # Presence is a stat. Opening /etc/kerio-kvc.conf is the helper's job.
+        text = Path(status_module.__file__).read_text(encoding="utf-8")
+        assert "parse_config" not in text
+        assert "config_access" not in text
+        assert "kerio-kvc.conf" not in text
 
 
 class TestFormatReport:

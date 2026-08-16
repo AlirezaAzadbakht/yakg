@@ -5,12 +5,15 @@ supports both. Which one is in charge is decided at runtime, never assumed:
 systemd is used only when it is actually PID 1, because ``systemctl`` is present
 and partially functional even inside containers where it cannot manage anything.
 
-Privileges come from systemd's existing polkit actions
-(``org.freedesktop.systemd1.manage-units`` and ``manage-unit-files``). YAKG
-ships no helper binary and no policy file: ``systemctl`` asks PID 1 over D-Bus,
-and the session agent prompts. The SysV path uses ``pkexec`` instead, because
-the init script has no polkit integration of its own. That path is unverified
+Privileges for start, stop, restart, enable, disable and reload come from
+systemd's existing polkit actions (``org.freedesktop.systemd1.manage-units``
+and ``manage-unit-files``). ``systemctl`` asks PID 1 over D-Bus, and the
+session agent prompts. The SysV path uses ``pkexec`` instead, because the
+init script has no polkit integration of its own. That path is unverified
 on a live SysV host; see ``docs/kerio-facts.md``.
+
+Reading and writing ``/etc/kerio-kvc.conf`` is a different privilege and
+goes through ``yakg-helper``, not this module.
 """
 
 from __future__ import annotations
@@ -119,6 +122,7 @@ _SUCCESS = {
     "start": "Started the Kerio VPN service.",
     "stop": "Stopped the Kerio VPN service.",
     "restart": "Restarted the Kerio VPN service.",
+    "reload": "Reloaded the Kerio VPN service.",
     "enable": "The Kerio VPN service will start at boot.",
     "disable": "The Kerio VPN service will not start at boot.",
 }
@@ -126,6 +130,7 @@ _FAILURE = {
     "start": "Could not start the Kerio VPN service.",
     "stop": "Could not stop the Kerio VPN service.",
     "restart": "Could not restart the Kerio VPN service.",
+    "reload": "Could not reload the Kerio VPN service.",
     "enable": "Could not enable the Kerio VPN service at boot.",
     "disable": "Could not disable the Kerio VPN service at boot.",
 }
@@ -152,6 +157,9 @@ class ServiceBackend:
         raise NotImplementedError
 
     def restart(self) -> ActionOutcome:
+        raise NotImplementedError
+
+    def reload(self) -> ActionOutcome:
         raise NotImplementedError
 
     def enable(self) -> ActionOutcome:
@@ -236,6 +244,9 @@ class SystemdBackend(ServiceBackend):
 
     def restart(self) -> ActionOutcome:
         return self._run_systemctl("restart")
+
+    def reload(self) -> ActionOutcome:
+        return self._run_systemctl("reload")
 
     def enable(self) -> ActionOutcome:
         return self._run_systemctl("enable")
@@ -328,6 +339,9 @@ class SysVInitBackend(ServiceBackend):
     def restart(self) -> ActionOutcome:
         return self._run_init_script("restart")
 
+    def reload(self) -> ActionOutcome:
+        return self._run_init_script("reload")
+
     def enable(self) -> ActionOutcome:
         return self._run_update_rc("enable")
 
@@ -385,6 +399,9 @@ class NullBackend(ServiceBackend):
         return self._unavailable()
 
     def restart(self) -> ActionOutcome:
+        return self._unavailable()
+
+    def reload(self) -> ActionOutcome:
         return self._unavailable()
 
     def enable(self) -> ActionOutcome:
@@ -471,6 +488,9 @@ class ServiceManager:
 
     def restart_service(self) -> ActionOutcome:
         return self._run("restart", self.backend.restart)
+
+    def reload_service(self) -> ActionOutcome:
+        return self._run("reload", self.backend.reload)
 
     def enable_service(self) -> ActionOutcome:
         return self._run("enable", self.backend.enable)

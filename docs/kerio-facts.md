@@ -61,12 +61,14 @@ The unit is installed but ships **disabled**; the package enables it through
 Provenance: `/usr/share/polkit-1/actions/org.freedesktop.systemd1.policy` on
 Ubuntu 24.04, polkit 124.
 
-`systemctl start|stop|restart kerio-kvc.service` is authorised by
+`systemctl start|stop|restart|reload kerio-kvc.service` is authorised by
 `org.freedesktop.systemd1.manage-units`. `systemctl enable|disable` is
 authorised by `org.freedesktop.systemd1.manage-unit-files`. Both default to
 `auth_admin_keep` for an active local session. YAKG therefore runs `systemctl`
 as the logged-in user and lets systemd and the session agent handle the prompt.
-It does not ship a helper or a policy file.
+It does not ship a helper or a policy file for service control. Reading and
+writing `/etc/kerio-kvc.conf` uses the shipped `yakg-helper` instead; see
+below.
 
 The SysV path has no equivalent polkit action, so YAKG uses `pkexec` on
 `/etc/init.d/kerio-kvc` and `/usr/sbin/update-rc.d`. That path has **not** been
@@ -115,7 +117,33 @@ Location: `/etc/kerio-kvc.conf`, mode `0600`, owned by root.
   colon-separated uppercase hex. The wizard obtains it with
   `openssl s_client -connect host:port | openssl x509 -fingerprint -md5 -noout`.
 - After editing the file, the configuration must be reloaded
-  (`SIGHUP`, or `/etc/init.d/kerio-kvc reload`).
+  (`SIGHUP`, or `/etc/init.d/kerio-kvc reload`). YAKG does this with
+  `systemctl reload kerio-kvc.service` after a successful save, and only
+  when the service is already running.
+
+### YAKG helper
+
+There is no existing polkit action that can read or write
+`/etc/kerio-kvc.conf`. YAKG therefore ships `yakg-helper`, installed to
+`/usr/libexec/yakg-helper`, authorised by `io.github.yakg.Yakg.manage-config`
+(`allow_active` = `auth_admin_keep`). The GUI never runs as root and never
+opens the file itself.
+
+Helper verbs:
+
+| Verb | stdin | Arguments | Effect |
+| --- | --- | --- | --- |
+| `read` | unused | none | Print the file on stdout. Exit 3 if it is missing. |
+| `write` | the XML to store | none | Validate, back up, atomically replace, verify. |
+| `restore` | unused | a **basename** matching `kerio-kvc.conf.*` | Copy that backup over the live file. `/` and `..` are rejected. |
+
+Backups are written to `/var/backups/yakg/kerio-kvc.conf.<utc-timestamp>`.
+The directory is created mode `0700`; backup files and the live file are
+`0600`.
+
+YAKG does not preserve XML comments. The vendor file has none, and
+`xml.etree.ElementTree` cannot round-trip them, so the helper never adds
+any. Extra unknown child elements of the single `<connection>` are kept.
 
 ### The `XOR:` password encoding is obfuscation, not encryption
 

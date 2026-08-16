@@ -85,7 +85,7 @@ def gather_status(manager: ServiceManager | None = None) -> SystemSnapshot:
     """Detect the client, the service and the connection.
 
     Blocking. Callers on the GTK main thread must run this on a worker thread.
-    Never opens the Kerio configuration file.
+    Never opens the Kerio configuration file. Presence is still a stat.
     """
     installation = detect_client()
     service = (manager if manager is not None else ServiceManager()).get_service_status()

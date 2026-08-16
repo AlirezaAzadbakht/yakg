@@ -48,11 +48,13 @@ class FakeRunner:
 
     responses: dict[str, CommandResult] = field(default_factory=dict)
     calls: list[tuple[str, ...]] = field(default_factory=list)
+    kwargs_list: list[dict[str, object]] = field(default_factory=list)
     default: CommandResult | None = None
 
-    def __call__(self, argv: Sequence[str], **_kwargs: object) -> CommandResult:
+    def __call__(self, argv: Sequence[str], **kwargs: object) -> CommandResult:
         command = tuple(argv)
         self.calls.append(command)
+        self.kwargs_list.append(dict(kwargs))
         line = " ".join(command)
 
         for pattern, response in self.responses.items():
