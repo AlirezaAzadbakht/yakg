@@ -1,0 +1,4 @@
+data/io.github.yakg.Yakg.desktop usr/share/applications/
+src/yakg/resources/icons/hicolor/scalable/apps/io.github.yakg.Yakg.svg usr/share/icons/hicolor/scalable/apps/
+data/polkit/io.github.yakg.Yakg.policy usr/share/polkit-1/actions/
+debian/yakg-helper usr/libexec/

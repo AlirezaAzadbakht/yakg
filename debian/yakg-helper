@@ -1,0 +1,11 @@
+#!/usr/bin/python3
+"""Privileged helper shipped at /usr/libexec/yakg-helper.
+
+The GUI only looks for this path. A .deb install is root-owned, so the
+helper imports the packaged module rather than a private copy of the tree.
+"""
+
+from yakg.helper import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -39,3 +39,33 @@ jobs:
 
       - name: Test
         run: pytest
+
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debhelper \
+            dh-python \
+            pybuild-plugin-pyproject \
+            python3-all \
+            python3-setuptools
+
+      - name: Build package
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Smoke-test the package
+        run: |
+          set -eu
+          cp ../yakg_*_all.deb .
+          sudo apt-get install -y ./yakg_*_all.deb
+          yakg --version
+          test -f /usr/share/applications/io.github.yakg.Yakg.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/io.github.yakg.Yakg.svg
+          test -x /usr/libexec/yakg-helper
+          test -f /usr/share/polkit-1/actions/io.github.yakg.Yakg.policy

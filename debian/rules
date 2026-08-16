@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME=yakg
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_install:
+	dh_auto_install
+	rm -f debian/yakg/usr/bin/yakg-helper
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod 0755 debian/yakg/usr/libexec/yakg-helper

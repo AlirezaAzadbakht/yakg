@@ -54,7 +54,29 @@ and WSL images that do not boot with systemd.
 
 ## Installation
 
-YAKG is not packaged yet. Install the GTK bindings from Ubuntu, then YAKG from source:
+Download the `.deb` from the [latest GitHub Release](https://github.com/alirezaazadbakht/yakg/releases/latest) and install it:
+
+```bash
+sudo apt install ./yakg_*_all.deb
+yakg
+```
+
+That puts `yakg` on your PATH and *YAKG* in the applications list. The package includes
+`/usr/libexec/yakg-helper` and the polkit action that lets it read and write
+`/etc/kerio-kvc.conf`. **Applying a profile (Connect, or switching while connected)
+needs the helper.** Disconnect does not.
+
+If you previously installed with `pip install --user`, remove that copy so it does not
+shadow `/usr/bin/yakg`:
+
+```bash
+pip uninstall yakg
+```
+
+### Install from source
+
+The GTK bindings deliberately come from apt rather than pip: PyGObject built from PyPI has to
+match the system GTK, and installing it from the distribution avoids that whole problem.
 
 ```bash
 sudo apt install python3-pip python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1
@@ -65,12 +87,8 @@ sudo ./packaging/install-helper.sh
 yakg
 ```
 
-The GTK bindings deliberately come from apt rather than pip: PyGObject built from PyPI has to
-match the system GTK, and installing it from the distribution avoids that whole problem.
-
-`install-helper.sh` installs `/usr/libexec/yakg-helper` and the polkit action that lets it
-read and write `/etc/kerio-kvc.conf`. **Applying a profile (Connect, or switching while
-connected) needs the helper.** Disconnect does not.
+`install-helper.sh` is only needed for this source path. It installs
+`/usr/libexec/yakg-helper` and the polkit action. A `.deb` install already includes both.
 
 ## Usage
 
@@ -303,8 +321,9 @@ retrying. Open *Technical details* for the last VpnFSM line. Cancel stops the se
 That is still Connecting, not Disconnected. The last error, when known, is shown under the
 status.
 
-**Settings or Connect says the helper is needed** — run `sudo ./packaging/install-helper.sh`
-from the source tree. Disconnect works without it. Applying a profile needs the helper.
+**Settings or Connect says the helper is needed** — a `.deb` install already includes the
+helper. For a source install, run `sudo ./packaging/install-helper.sh` from the source
+tree. Disconnect works without it. Applying a profile needs the helper.
 
 **There is no tray icon** — GNOME needs a StatusNotifier host. On Ubuntu, install and
 enable `gnome-shell-extension-appindicator`, then sign out and back in. Closing the
@@ -323,7 +342,6 @@ explanation and the apt command that fixes it.
 - The tray icon needs a StatusNotifier host (on GNOME, the AppIndicator
   extension). Vanilla GNOME without that extension has no icon.
 - Verified against exactly one Kerio version, on Ubuntu 24.04.
-- No packaging: source installation only.
 
 ## Contributing
 

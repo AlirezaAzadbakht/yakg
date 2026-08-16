@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debhelper \
+            dh-python \
+            dpkg-dev \
+            pybuild-plugin-pyproject \
+            python3-all \
+            python3-setuptools
+
+      - name: Check versions match the tag
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          py_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          deb_version=$(dpkg-parsechangelog -S Version)
+          deb_upstream="${deb_version%-*}"
+          echo "tag=$tag pyproject=$py_version changelog=$deb_version"
+          test "$tag" = "$py_version"
+          test "$tag" = "$deb_upstream"
+
+      - name: Build package
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect artifacts
+        run: |
+          set -eu
+          cp ../yakg_*_all.deb .
+          sha256sum yakg_*_all.deb > SHA256SUMS
+
+      - name: Smoke-test the package
+        run: |
+          set -eu
+          sudo apt-get install -y ./yakg_*_all.deb
+          yakg --version
+          test -f /usr/share/applications/io.github.yakg.Yakg.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/io.github.yakg.Yakg.svg
+          test -x /usr/libexec/yakg-helper
+          test -f /usr/share/polkit-1/actions/io.github.yakg.Yakg.policy
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --title "YAKG ${GITHUB_REF_NAME#v}" \
+            yakg_*_all.deb \
+            SHA256SUMS
