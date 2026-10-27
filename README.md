@@ -54,16 +54,30 @@ and WSL images that do not boot with systemd.
 
 ## Installation
 
-Add the apt repository (once), then install:
+### From the apt repository (recommended)
+
+Works on Ubuntu/Debian. Add the signed repository once:
 
 ```bash
+sudo mkdir -p /etc/apt/keyrings
 sudo curl -fsSL https://alirezaazadbakht.github.io/yakg/yakg.gpg -o /etc/apt/keyrings/yakg.gpg
 echo "deb [signed-by=/etc/apt/keyrings/yakg.gpg] https://alirezaazadbakht.github.io/yakg stable main" \
   | sudo tee /etc/apt/sources.list.d/yakg.list
-sudo apt update && sudo apt install yakg
 ```
 
-Or download the `.deb` from the [latest GitHub Release](https://github.com/alirezaazadbakht/yakg/releases/latest) and install it:
+Install and start it:
+
+```bash
+sudo apt update
+sudo apt install yakg
+yakg
+```
+
+Later releases arrive with the normal `sudo apt update && sudo apt upgrade`.
+
+### From a downloaded .deb
+
+Download the `.deb` from the [latest GitHub Release](https://github.com/alirezaazadbakht/yakg/releases/latest) and install it:
 
 ```bash
 sudo apt install ./yakg_*_all.deb
