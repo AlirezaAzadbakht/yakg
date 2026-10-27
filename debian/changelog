@@ -1,3 +1,9 @@
+yakg (0.1.1-1) noble; urgency=medium
+
+  * Publish a signed apt repository on release.
+
+ -- Alireza Azadbakht <alirezaazadbakht@users.noreply.github.com>  Tue, 27 Oct 2026 12:00:00 +0330
+
 yakg (0.1.0-1) noble; urgency=medium
 
   * Initial package.
