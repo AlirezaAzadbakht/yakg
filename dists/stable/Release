@@ -1,0 +1,22 @@
+Architectures: all
+Codename: stable
+Components: main
+Date: Tue, 27 Oct 2026 11:18:49 +0000
+Origin: yakg
+Suite: stable
+MD5Sum:
+ 7cc2d5ad7e4c71bc37647c14e28dce25              118 Release
+ d92a77c78a948fdf876fbdf8f48134a2              872 main/binary-all/Packages
+ 4bcd3528b16020c0f62bb6f813abbd64              589 main/binary-all/Packages.gz
+SHA1:
+ 0416ff2ada2006b5f92f4d03db0e297356d90445              118 Release
+ 667cd7ca4f9b3140c65f5681978301f2e7497860              872 main/binary-all/Packages
+ c1b689e12ca35ef50551e8faf14e8a46f5d1fbb5              589 main/binary-all/Packages.gz
+SHA256:
+ 87bdce939dfda3a1d9b26463371dd1797d3970504bf219f063743a2962a78818              118 Release
+ 84b99eec6c063aafdfcd34cb13678afc5c84e30612545296294328b623749d30              872 main/binary-all/Packages
+ 2bd91d75770b762753c82b253870d978a7d0d0e2074b4978334fb4d0f16852f0              589 main/binary-all/Packages.gz
+SHA512:
+ 578faaa63b4af2054d79f160f93f52ecdb0434e16b55322da1e8c133dbfb33a383988b7bc06f891792a789e87833294dd7fd79c47850ed25530008e683231dfc              118 Release
+ 60cfa21eaa813e9ddd0654077b4778884cd3b8c620c7569c977ec0d8528813e39352658a1aa77b606d365d64a7f473fae776a11efbcb31ac5f4be60c7585f87d              872 main/binary-all/Packages
+ fe927a2f83d3c111b3a7a88ec0f4dc0f45e3517cfdfc5119b9655e61693e69337f1f6375a6a8f9345e9971f4af2552bca23f9656061ce7f955ab60a62643ec32              589 main/binary-all/Packages.gz
