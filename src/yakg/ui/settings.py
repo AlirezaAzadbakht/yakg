@@ -29,6 +29,7 @@ from yakg.backend.profiles import (
     validate_profile_name,
     validate_username,
 )
+from yakg.backend.routes import parse_routes
 from yakg.backend.secrets import default_secret_store
 from yakg.backend.service import ServiceManager
 from yakg.models.action import ActionOutcome
@@ -114,6 +115,7 @@ class SettingsWindow(Adw.Window):
         self._port.set_text(str(DEFAULT_PORT))
         self._username = Adw.EntryRow(title="Username")
         self._fingerprint = Adw.EntryRow(title="Fingerprint")
+        self._routes = Adw.EntryRow(title="VPN routes (e.g. 192.168.70.0/24)")
 
         self._password = Gtk.PasswordEntry(
             hexpand=True,
@@ -137,6 +139,7 @@ class SettingsWindow(Adw.Window):
             password_row,
             self._fingerprint,
             self._detect_row,
+            self._routes,
         ):
             group.add(row)
 
@@ -180,12 +183,14 @@ class SettingsWindow(Adw.Window):
             self._port.set_text(str(DEFAULT_PORT))
             self._username.set_text("")
             self._fingerprint.set_text("")
+            self._routes.set_text("")
         else:
             self._name.set_text(profile.name)
             self._server.set_text(profile.server)
             self._port.set_text(str(profile.port or DEFAULT_PORT))
             self._username.set_text(profile.username)
             self._fingerprint.set_text(profile.fingerprint)
+            self._routes.set_text(", ".join(profile.routes))
         self._password.set_text("")
 
     def _profile_from_form(self) -> Profile:
@@ -200,6 +205,7 @@ class SettingsWindow(Adw.Window):
             connection_type=(
                 self._profile.connection_type if self._profile is not None else "persistent"
             ),
+            routes=parse_routes(self._routes.get_text()),
         )
 
     def _save(self) -> None:
@@ -340,6 +346,7 @@ class SettingsWindow(Adw.Window):
             self._port,
             self._username,
             self._fingerprint,
+            self._routes,
             self._password,
         ):
             widget.set_sensitive(enabled)

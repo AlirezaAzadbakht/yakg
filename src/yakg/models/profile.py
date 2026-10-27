@@ -20,6 +20,8 @@ class Profile:
     username: str
     fingerprint: str
     connection_type: str = "persistent"
+    #: IPv4 CIDRs kept on the tunnel. Empty means leave Kerio's routes alone.
+    routes: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         # Username is not a secret, but it is PII and must not appear in logs.

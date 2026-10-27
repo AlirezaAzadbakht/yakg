@@ -24,6 +24,7 @@ from yakg.backend.config import (
     write_private_file,
 )
 from yakg.backend.paths import config_home
+from yakg.backend.routes import parse_routes
 from yakg.models.profile import Profile, ProfileState
 from yakg.utils.logging import get_logger
 
@@ -99,6 +100,7 @@ def validate_profile(profile: Profile) -> Profile:
         username=username,
         fingerprint=fingerprint,
         connection_type=profile.connection_type or "persistent",
+        routes=parse_routes(" ".join(profile.routes)),
     )
 
 
@@ -150,6 +152,7 @@ def save_profile(store: ProfileStore, profile: Profile) -> Profile:
         "username": stored.username,
         "fingerprint": stored.fingerprint,
         "connection_type": stored.connection_type,
+        "routes": list(stored.routes),
     }
     _write_json(path, payload)
     log.info("Saved profile %s for %s:%s", stored.name, stored.server, stored.port)
@@ -244,6 +247,7 @@ def _read_profile_file(path: Path) -> Profile:
             username=str(raw.get("username", "")),
             fingerprint=str(raw.get("fingerprint", "")),
             connection_type=str(raw.get("connection_type") or "persistent"),
+            routes=tuple(str(item) for item in raw.get("routes") or ()),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ConfigError("That profile is not valid.") from error

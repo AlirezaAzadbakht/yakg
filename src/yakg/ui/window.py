@@ -30,6 +30,7 @@ from yakg.backend.activate import (
 from yakg.backend.autostart import apply_start_at_login
 from yakg.backend.preferences import load_preferences, save_preferences
 from yakg.backend.profiles import default_store, get_profile
+from yakg.backend.routes import request_split_routes
 from yakg.backend.secrets import default_secret_store
 from yakg.backend.service import ServiceManager
 from yakg.backend.status import gather_status
@@ -99,6 +100,7 @@ class YakgWindow(Adw.ApplicationWindow):
         self._user_stop = False
         self._connect_timed_out = False
         self._quitting = False
+        self._routes_applied = False
 
         self._add_window_actions()
 
@@ -390,6 +392,8 @@ class YakgWindow(Adw.ApplicationWindow):
             self._awaiting_connect = False
             self._stop_connect_poll()
 
+        self._maybe_apply_routes(snapshot)
+
         self._notify_app(
             previous,
             snapshot,
@@ -409,6 +413,25 @@ class YakgWindow(Adw.ApplicationWindow):
 
         self._set_controls_sensitive(True)
         return _DONE
+
+    def _maybe_apply_routes(self, snapshot: SystemSnapshot) -> None:
+        """Once per connection, keep only the profile's subnets on the tunnel."""
+        if snapshot.connection.state is not ConnectionState.CONNECTED:
+            self._routes_applied = False
+            return
+        if self._routes_applied or self._selected_id is None:
+            return
+        profile = get_profile(default_store(), self._selected_id)
+        if profile is None or not profile.routes:
+            return
+        self._routes_applied = True
+        threading.Thread(
+            target=self._routes_worker, args=(profile.routes,), name="yakg-routes", daemon=True
+        ).start()
+
+    def _routes_worker(self, routes: tuple[str, ...]) -> None:
+        outcome = request_split_routes(routes)
+        GLib.idle_add(self._show_toast, outcome.message)
 
     def _on_refresh_failed(self, message: str) -> bool:
         self._refreshing = False

@@ -2,8 +2,9 @@
 
 This module is invoked by ``pkexec`` as ``/usr/libexec/yakg-helper``. It is
 the only process YAKG uses to touch ``/etc/kerio-kvc.conf``. Verbs are
-``read``, ``write`` and ``restore``. There are no path arguments: ``write``
-reads XML from stdin, and ``restore`` takes a basename that must match
+``read``, ``write``, ``restore`` and ``routes`` (split tunnel; CIDRs on stdin).
+There are no path arguments: ``write`` reads XML from stdin, and ``restore``
+takes a basename that must match
 ``kerio-kvc.conf.*`` under the backup directory.
 
 Must not import GTK.
@@ -24,13 +25,14 @@ from yakg.backend.config import (
     write_config_atomically,
 )
 from yakg.backend.constants import CONFIG_BACKUP_DIR, CONFIG_PATH
+from yakg.backend.routes import apply_split_routes
 
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_MISSING = 3
 
-_USAGE = "usage: yakg-helper read|write|restore [backup-name]"
+_USAGE = "usage: yakg-helper read|write|restore [backup-name]|routes"
 
 
 def dispatch(
@@ -59,6 +61,12 @@ def dispatch(
                 print(_USAGE, file=stderr)
                 return EXIT_USAGE
             return _cmd_write(stdin, stderr, config_path, backup_dir)
+        if verb == "routes":
+            if len(args) != 1:
+                print(_USAGE, file=stderr)
+                return EXIT_USAGE
+            apply_split_routes(stdin.read().split())
+            return EXIT_OK
         if verb == "restore":
             if len(args) != 2:
                 print(_USAGE, file=stderr)
