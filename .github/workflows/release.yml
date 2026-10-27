@@ -78,6 +78,7 @@ jobs:
           GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
         run: |
           set -eu
+          sudo apt-get update && sudo apt-get install -y apt-utils
           git clone --branch gh-pages --single-branch \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo 2>/dev/null \
             || { git init -b gh-pages repo; git -C repo remote add origin \

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yakg"
-version = "0.1.1"
+version = "0.1.2"
 description = "Yet Another Kerio GUI - an unofficial Linux desktop frontend for the Kerio Control VPN Client"
 readme = "README.md"
 license = { file = "LICENSE" }
