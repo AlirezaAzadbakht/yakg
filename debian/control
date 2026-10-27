@@ -22,8 +22,7 @@ Depends:
  gir1.2-gtk-4.0,
  gir1.2-adw-1,
  gir1.2-secret-1,
- pkexec,
- policykit-1
+ pkexec
 Description: unofficial desktop frontend for Kerio Control VPN Client
  A small GNOME frontend that detects, connects and manages the
  Kerio Control VPN Client already installed on the machine.
