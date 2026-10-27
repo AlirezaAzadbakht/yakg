@@ -66,3 +66,44 @@ jobs:
             --title "YAKG ${GITHUB_REF_NAME#v}" \
             yakg_*_all.deb \
             SHA256SUMS
+
+  apt-repo:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add the new .deb to the signed apt repo on gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -eu
+          git clone --branch gh-pages --single-branch \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo 2>/dev/null \
+            || { git init -b gh-pages repo; git -C repo remote add origin \
+                 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"; }
+          cd repo
+          mkdir -p pool dists/stable/main/binary-all
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*_all.deb' --dir pool --clobber
+
+          apt-ftparchive packages pool > dists/stable/main/binary-all/Packages
+          gzip -kf9 dists/stable/main/binary-all/Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin=yakg \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=all \
+            -o APT::FTPArchive::Release::Components=main \
+            release dists/stable > dists/stable/Release
+
+          echo "$GPG_KEY" | gpg --batch --import
+          gpg --batch --yes --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --batch --yes --detach-sign --armor -o dists/stable/Release.gpg dists/stable/Release
+          gpg --export > yakg.gpg
+          touch .nojekyll
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "apt repo: $GITHUB_REF_NAME"
+          git push origin gh-pages
